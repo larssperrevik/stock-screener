@@ -17,6 +17,7 @@ from data.simfin_loader import (
     load_prices, get_all_fundamentals_at_date, get_tradeable_tickers_at_date,
     load_companies, load_industries,
 )
+from data.live_prices import get_live_prices
 from screener.criteria import ScreenCriteria, apply_screen
 from backtest.engine import BacktestEngine
 from metrics.performance import (
@@ -49,13 +50,9 @@ def _rolling_returns_json(returns, window, label):
 
 
 def latest_screen_with_returns(criteria=None, screen_date="2024-07-01"):
+    """Run screen at a date and compute returns to today using live FMP prices."""
     if criteria is None:
         criteria = ScreenCriteria()
-
-    all_prices = load_prices()
-    price_matrix = all_prices.pivot_table(
-        index="Date", columns="Ticker", values="Adj. Close", aggfunc="first"
-    )
 
     fundamentals = get_all_fundamentals_at_date(screen_date)
     tradeable = get_tradeable_tickers_at_date(screen_date)
@@ -65,23 +62,50 @@ def latest_screen_with_returns(criteria=None, screen_date="2024-07-01"):
     if screened.empty:
         return pd.DataFrame()
 
+    top_tickers = screened.head(30)["Ticker"].tolist()
+
+    # Get SimFin prices for the screen date baseline
+    all_prices = load_prices()
+    price_matrix = all_prices.pivot_table(
+        index="Date", columns="Ticker", values="Adj. Close", aggfunc="first"
+    )
+
+    # Fetch live prices from FMP (screen date to today)
+    print(f"  Fetching live prices for {len(top_tickers)} tickers...")
+    live = get_live_prices(top_tickers, start=screen_date)
+
     companies = load_companies()
     industries = load_industries()
 
     results = []
     for _, row in screened.head(30).iterrows():
         ticker = row["Ticker"]
-        if ticker not in price_matrix.columns:
+
+        # Get baseline price at screen date from SimFin
+        if ticker in price_matrix.columns:
+            simfin_prices = price_matrix[ticker].dropna()
+            baseline_prices = simfin_prices[simfin_prices.index >= screen_date]
+            if len(baseline_prices) > 0:
+                baseline_price = baseline_prices.iloc[0]
+            else:
+                continue
+        else:
             continue
 
-        prices = price_matrix[ticker].dropna()
-        screen_prices = prices[prices.index >= screen_date]
-        if len(screen_prices) < 2:
-            continue
+        # Get latest price: prefer live FMP data, fall back to SimFin
+        if not live.empty and ticker in live.columns:
+            live_col = live[ticker].dropna()
+            if len(live_col) > 0:
+                last_price = live_col.iloc[-1]
+                last_date = live_col.index[-1].strftime("%Y-%m-%d")
+            else:
+                last_price = baseline_prices.iloc[-1]
+                last_date = baseline_prices.index[-1].strftime("%Y-%m-%d")
+        else:
+            last_price = baseline_prices.iloc[-1] if len(baseline_prices) > 0 else baseline_price
+            last_date = baseline_prices.index[-1].strftime("%Y-%m-%d") if len(baseline_prices) > 0 else screen_date
 
-        ret_since = (screen_prices.iloc[-1] / screen_prices.iloc[0]) - 1
-        last_price = screen_prices.iloc[-1]
-        last_date = screen_prices.index[-1].strftime("%Y-%m-%d")
+        ret_since = (last_price / baseline_price) - 1
 
         co = companies[companies["Ticker"] == ticker]
         co_name = co.iloc[0]["Company Name"] if not co.empty else ""
