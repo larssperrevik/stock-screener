@@ -13,7 +13,7 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 
-from data.simfin_loader import load_prices, load_derived_annual, get_all_fundamentals_at_date
+from data.simfin_loader import load_prices, load_derived_annual, get_all_fundamentals_at_date, get_tradeable_tickers_at_date
 from screener.criteria import ScreenCriteria, apply_screen
 from ml.features import build_fundamental_features, build_price_features
 from ml.model import get_feature_cols, save_dataset, load_dataset
@@ -85,7 +85,10 @@ class CombinedStrategy:
             date_str = date.strftime("%Y-%m-%d")
 
             # === STEP 1: Screen for quality ===
+            # Only consider actively trading stocks (filters out acquired/delisted)
+            tradeable = set(get_tradeable_tickers_at_date(date))
             fundamentals = get_all_fundamentals_at_date(date)
+            fundamentals = fundamentals[fundamentals["Ticker"].isin(tradeable)]
             screened = apply_screen(fundamentals, self.criteria)
 
             if screened.empty:

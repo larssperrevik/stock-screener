@@ -21,6 +21,7 @@ from data.simfin_loader import (
 from data.live_prices import get_live_prices
 from screener.criteria import ScreenCriteria, apply_screen
 from backtest.engine import BacktestEngine
+from combined_strategy import CombinedStrategy
 from metrics.performance import (
     cagr, sharpe_ratio, sortino_ratio, max_drawdown, ulcer_index, full_report
 )
@@ -142,11 +143,13 @@ def generate_dashboard(
     end="2024-09-30",
     freq="quarterly",
     top_n=20,
+    min_confidence=0.20,
     output="dashboard.html",
 ):
     if criteria is None:
         criteria = ScreenCriteria()
 
+    # === Run simple screener backtest ===
     engine = BacktestEngine(
         criteria=criteria, rebalance_freq=freq, top_n=top_n,
         start_date=start, end_date=end,
@@ -158,16 +161,43 @@ def generate_dashboard(
     report = result["report"]
     holdings = result["holdings_history"]
 
+    # === Run combined strategy (screener + ML) ===
+    # Combined starts at 2011 because ML needs 5 years of training data
+    combined_start = "2011-01-01"
+    print("\n\nRunning combined screener + ML strategy...")
+    try:
+        combined = CombinedStrategy(
+            criteria=criteria, top_n=top_n, min_confidence=min_confidence,
+            start_date=combined_start, end_date=end,
+        )
+        combined_result = combined.run()
+        comb_ret = combined_result["portfolio_returns"]
+        comb_report = combined_result["report"]
+        comb_holdings = combined_result["holdings_history"]
+        has_combined = True
+    except Exception as e:
+        print(f"Combined strategy failed: {e}")
+        has_combined = False
+        comb_ret = None
+        comb_report = {}
+        comb_holdings = []
+
+    # === Latest screen with live returns ===
     last_rebal = holdings[-1]["date"].strftime("%Y-%m-%d")
     print(f"\nRunning latest screen at {last_rebal} with forward returns...")
     latest = latest_screen_with_returns(criteria, screen_date=last_rebal)
 
-    cum_port = _cumulative_returns_json(port_ret, "Portfolio")
+    # === Build chart data ===
+    cum_port = _cumulative_returns_json(port_ret, "Screener")
     cum_bench = _cumulative_returns_json(bench_ret, "SPY") if bench_ret is not None else None
-    dd_port = _drawdown_json(port_ret, "Portfolio")
+    dd_port = _drawdown_json(port_ret, "Screener")
     dd_bench = _drawdown_json(bench_ret, "SPY") if bench_ret is not None else None
-    roll_port = _rolling_returns_json(port_ret, 252, "Portfolio (1Y)")
+    roll_port = _rolling_returns_json(port_ret, 252, "Screener (1Y)")
     roll_bench = _rolling_returns_json(bench_ret, 252, "SPY (1Y)") if bench_ret is not None else None
+
+    cum_combined = _cumulative_returns_json(comb_ret, "Screener + ML") if has_combined else None
+    dd_combined = _drawdown_json(comb_ret, "Screener + ML") if has_combined else None
+    roll_combined = _rolling_returns_json(comb_ret, 252, "Screener + ML (1Y)") if has_combined else None
 
     holdings_data = []
     for h in holdings:
@@ -176,20 +206,37 @@ def generate_dashboard(
             "tickers": h["tickers"],
         })
 
+    # Combined holdings with ML scores
+    comb_holdings_data = []
+    if has_combined:
+        for h in comb_holdings:
+            scores = h.get("scores", {})
+            tickers_with_scores = [(t, scores.get(t, 0)) for t in h["tickers"]]
+            comb_holdings_data.append({
+                "date": h["date"].strftime("%Y-%m-%d"),
+                "tickers": h["tickers"],
+                "scores": scores,
+                "cash": h.get("cash", False),
+            })
+
     latest_data = latest.to_dict("records") if not latest.empty else []
 
     chart_data = {
-        "cumulative": [cum_port] + ([cum_bench] if cum_bench else []),
-        "drawdown": [dd_port] + ([dd_bench] if dd_bench else []),
-        "rolling": [roll_port] + ([roll_bench] if roll_bench else []),
+        "cumulative": [cum_port] + ([cum_combined] if cum_combined else []) + ([cum_bench] if cum_bench else []),
+        "drawdown": [dd_port] + ([dd_combined] if dd_combined else []) + ([dd_bench] if dd_bench else []),
+        "rolling": [roll_port] + ([roll_combined] if roll_combined else []) + ([roll_bench] if roll_bench else []),
         "report": {k: round(v, 4) if isinstance(v, float) else v for k, v in report.items()},
+        "combined_report": {k: round(v, 4) if isinstance(v, float) else v for k, v in comb_report.items()} if has_combined else {},
+        "has_combined": has_combined,
         "holdings": holdings_data,
+        "combined_holdings": comb_holdings_data,
         "latest_screen": latest_data,
         "last_rebalance": last_rebal,
         "config": {
             "start": start, "end": end, "freq": freq, "top_n": top_n,
             "min_roe": criteria.min_roe, "min_roic": criteria.min_roic,
             "min_piotroski": criteria.min_piotroski,
+            "min_confidence": min_confidence,
         },
     }
 
@@ -207,6 +254,8 @@ def _pct(val, digits=1):
 
 def _build_html(data):
     report = data["report"]
+    comb_report = data.get("combined_report", {})
+    has_combined = data.get("has_combined", False)
     config = data["config"]
 
     screen_rows = ""
@@ -229,14 +278,28 @@ def _build_html(data):
             "</tr>\n"
         )
 
+    # Screener holdings
     holdings_rows = ""
-    for h in reversed(data["holdings"][-12:]):
+    for h in reversed(data["holdings"][-8:]):
         tickers_str = ", ".join(h["tickers"][:10])
         more = f" +{len(h['tickers'])-10}" if len(h["tickers"]) > 10 else ""
         holdings_rows += f"<tr><td>{h['date']}</td><td>{tickers_str}{more}</td></tr>\n"
 
+    # Combined holdings with ML scores
+    comb_holdings_rows = ""
+    for h in reversed(data.get("combined_holdings", [])[-8:]):
+        if h.get("cash"):
+            comb_holdings_rows += f"<tr><td>{h['date']}</td><td class='warn'>CASH</td></tr>\n"
+        else:
+            scores = h.get("scores", {})
+            parts = [f"{t}(<span class='ml-score'>{scores.get(t,0):.0%}</span>)" for t in h["tickers"][:8]]
+            more = f" +{len(h['tickers'])-8}" if len(h["tickers"]) > 8 else ""
+            comb_holdings_rows += f"<tr><td>{h['date']}</td><td>{', '.join(parts)}{more}</td></tr>\n"
+
     excess = report.get("excess_return", 0)
     excess_class = "highlight" if excess > 0 else "danger"
+    comb_excess = comb_report.get("excess_return", 0)
+    comb_excess_class = "highlight" if comb_excess > 0 else "danger"
 
     cum_json = json.dumps(data["cumulative"])
     dd_json = json.dumps(data["drawdown"])
@@ -276,27 +339,50 @@ def _build_html(data):
   .table-container {{ background: #161b22; border: 1px solid #30363d; border-radius: 8px;
                       padding: 15px; margin: 15px 0; max-height: 500px; overflow-y: auto; }}
   .two-col {{ display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }}
-  @media (max-width: 900px) {{ .two-col {{ grid-template-columns: 1fr; }} }}
+  .three-col {{ display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; }}
+  .ml-score {{ color: #d2a8ff; }}
+  .warn {{ color: #d29922; }}
+  .strategy-card {{ background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 20px; }}
+  .strategy-card h3 {{ color: #58a6ff; margin-bottom: 15px; font-size: 1.1em; }}
+  .strategy-card.combined h3 {{ color: #d2a8ff; }}
+  .strategy-card .stat {{ display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid #21262d; }}
+  .strategy-card .stat .val {{ font-weight: bold; }}
+  @media (max-width: 900px) {{ .two-col, .three-col {{ grid-template-columns: 1fr; }} }}
 </style>
 </head>
 <body>
 
-<h1>Value Investing Screener</h1>
-<p class="subtitle">Buffett/Munger-style quality screen &middot; {config['start']} to {config['end']} &middot;
-   {config['freq']} rebalance &middot; Top {config['top_n']} stocks &middot;
-   Min ROE {_pct(config['min_roe'], 0)} &middot; Min ROIC {_pct(config['min_roic'], 0)} &middot; Min Piotroski {config['min_piotroski']}</p>
+<h1>Value Investing Screener + ML</h1>
+<p class="subtitle">Buffett/Munger quality screen + LightGBM timing &middot; {config['start']} to {config['end']} &middot;
+   {config['freq']} rebalance &middot; Top {config['top_n']} &middot;
+   ML confidence &ge; {_pct(config.get('min_confidence', 0.2), 0)}</p>
 
-<h2>Performance Summary</h2>
-<div class="grid">
-  <div class="metric highlight"><div class="value">{_pct(report['cagr'])}</div><div class="label">CAGR</div></div>
-  <div class="metric"><div class="value">{_pct(report.get('benchmark_cagr', 0))}</div><div class="label">SPY CAGR</div></div>
-  <div class="metric {excess_class}">
-    <div class="value">{_pct(excess)}</div><div class="label">Excess Return</div></div>
-  <div class="metric"><div class="value">{_pct(report['total_return'], 0)}</div><div class="label">Total Return</div></div>
-  <div class="metric"><div class="value">{report['sharpe']:.2f}</div><div class="label">Sharpe</div></div>
-  <div class="metric"><div class="value">{report['sortino']:.2f}</div><div class="label">Sortino</div></div>
-  <div class="metric danger"><div class="value">{_pct(report['max_drawdown'])}</div><div class="label">Max Drawdown</div></div>
-  <div class="metric"><div class="value">{_pct(report['volatility'])}</div><div class="label">Volatility</div></div>
+<h2>Strategy Comparison</h2>
+<div class="three-col">
+  <div class="strategy-card">
+    <h3>Screener Only</h3>
+    <div class="stat"><span>CAGR</span><span class="val">{_pct(report['cagr'])}</span></div>
+    <div class="stat"><span>Total Return</span><span class="val">{_pct(report['total_return'], 0)}</span></div>
+    <div class="stat"><span>Sharpe</span><span class="val">{report['sharpe']:.2f}</span></div>
+    <div class="stat"><span>Sortino</span><span class="val">{report['sortino']:.2f}</span></div>
+    <div class="stat"><span>Max Drawdown</span><span class="val negative">{_pct(report['max_drawdown'])}</span></div>
+    <div class="stat"><span>Volatility</span><span class="val">{_pct(report['volatility'])}</span></div>
+    <div class="stat"><span>vs SPY</span><span class="val {excess_class}">{_pct(excess)}</span></div>
+  </div>
+  {'<div class="strategy-card combined"><h3>Screener + ML</h3>' + f"""
+    <div class="stat"><span>CAGR</span><span class="val">{_pct(comb_report.get('cagr'))}</span></div>
+    <div class="stat"><span>Total Return</span><span class="val">{_pct(comb_report.get('total_return'), 0)}</span></div>
+    <div class="stat"><span>Sharpe</span><span class="val">{comb_report.get('sharpe', 0):.2f}</span></div>
+    <div class="stat"><span>Sortino</span><span class="val">{comb_report.get('sortino', 0):.2f}</span></div>
+    <div class="stat"><span>Max Drawdown</span><span class="val negative">{_pct(comb_report.get('max_drawdown'))}</span></div>
+    <div class="stat"><span>Volatility</span><span class="val">{_pct(comb_report.get('volatility'))}</span></div>
+    <div class="stat"><span>vs SPY</span><span class="val {comb_excess_class}">{_pct(comb_excess)}</span></div>
+  </div>""" if has_combined else ''}
+  <div class="strategy-card">
+    <h3>SPY Benchmark</h3>
+    <div class="stat"><span>CAGR</span><span class="val">{_pct(report.get('benchmark_cagr'))}</span></div>
+    <div class="stat"><span>Max Drawdown</span><span class="val negative">{_pct(report.get('benchmark_max_dd'))}</span></div>
+  </div>
 </div>
 
 <div class="two-col">
@@ -317,23 +403,38 @@ def _build_html(data):
 </table>
 </div>
 
-<h2>Recent Holdings</h2>
+<div class="two-col">
+<div>
+<h2>Screener Holdings</h2>
 <div class="table-container">
 <table>
-<thead><tr><th>Rebalance Date</th><th>Holdings</th></tr></thead>
+<thead><tr><th>Date</th><th>Holdings</th></tr></thead>
 <tbody>{holdings_rows}</tbody>
 </table>
 </div>
+</div>
+<div>
+<h2>Screener + ML Holdings</h2>
+<div class="table-container">
+<table>
+<thead><tr><th>Date</th><th>Holdings (ML score)</th></tr></thead>
+<tbody>{comb_holdings_rows}</tbody>
+</table>
+</div>
+</div>
+</div>
 
 <script>
-const chartColors = {{
-  portfolio: 'rgb(88, 166, 255)',
-  benchmark: 'rgb(139, 148, 158)',
-  portfolioFill: 'rgba(88, 166, 255, 0.1)',
-  benchmarkFill: 'rgba(139, 148, 158, 0.05)',
-  red: 'rgba(248, 81, 73, 0.5)',
-  redLine: 'rgb(248, 81, 73)',
-}};
+const colors = [
+  {{ line: 'rgb(88, 166, 255)', fill: 'rgba(88, 166, 255, 0.1)' }},   // Screener - blue
+  {{ line: 'rgb(210, 168, 255)', fill: 'rgba(210, 168, 255, 0.1)' }},  // Screener+ML - purple
+  {{ line: 'rgb(139, 148, 158)', fill: 'rgba(139, 148, 158, 0.05)' }}, // SPY - gray
+];
+const ddColors = [
+  {{ line: 'rgb(88, 166, 255)', fill: 'rgba(88, 166, 255, 0.3)' }},
+  {{ line: 'rgb(210, 168, 255)', fill: 'rgba(210, 168, 255, 0.3)' }},
+  {{ line: 'rgb(139, 148, 158)', fill: 'rgba(139, 148, 158, 0.1)' }},
+];
 
 const defaultOpts = {{
   responsive: true,
@@ -356,9 +457,9 @@ new Chart(document.getElementById('cumChart'), {{
     datasets: cumData.map((d, i) => ({{
       label: d.label,
       data: d.values,
-      borderColor: i === 0 ? chartColors.portfolio : chartColors.benchmark,
-      backgroundColor: i === 0 ? chartColors.portfolioFill : chartColors.benchmarkFill,
-      fill: true, borderWidth: 1.5, pointRadius: 0,
+      borderColor: colors[i % colors.length].line,
+      backgroundColor: colors[i % colors.length].fill,
+      fill: i === 0, borderWidth: 1.5, pointRadius: 0,
     }}))
   }},
   options: {{ ...defaultOpts, plugins: {{ ...defaultOpts.plugins,
@@ -372,8 +473,8 @@ new Chart(document.getElementById('ddChart'), {{
     datasets: ddData.map((d, i) => ({{
       label: d.label,
       data: d.values,
-      borderColor: i === 0 ? chartColors.redLine : chartColors.benchmark,
-      backgroundColor: i === 0 ? chartColors.red : 'transparent',
+      borderColor: ddColors[i % ddColors.length].line,
+      backgroundColor: ddColors[i % ddColors.length].fill,
       fill: true, borderWidth: 1.5, pointRadius: 0,
     }}))
   }},
@@ -391,7 +492,7 @@ new Chart(document.getElementById('rollChart'), {{
     datasets: rollData.map((d, i) => ({{
       label: d.label,
       data: d.values,
-      borderColor: i === 0 ? chartColors.portfolio : chartColors.benchmark,
+      borderColor: colors[i % colors.length].line,
       borderWidth: 1.5, pointRadius: 0, fill: false,
     }}))
   }},
@@ -416,6 +517,8 @@ if __name__ == "__main__":
     parser.add_argument("--min-roe", type=float, default=0.15)
     parser.add_argument("--min-roic", type=float, default=0.10)
     parser.add_argument("--min-piotroski", type=int, default=5)
+    parser.add_argument("--min-confidence", type=float, default=0.20,
+                        help="ML confidence threshold for combined strategy")
     parser.add_argument("-o", "--output", default="dashboard.html")
     args = parser.parse_args()
 
@@ -425,5 +528,6 @@ if __name__ == "__main__":
     end = datetime.now().strftime("%Y-%m-%d") if args.end == "today" else args.end
     generate_dashboard(
         criteria=criteria, start=args.start, end=end,
-        freq=args.freq, top_n=args.top_n, output=args.output,
+        freq=args.freq, top_n=args.top_n, min_confidence=args.min_confidence,
+        output=args.output,
     )
