@@ -64,9 +64,14 @@ class CombinedStrategy:
             [np.inf, -np.inf], 0.0
         ).fillna(0.0)
 
-        # Load pre-built ML dataset for training data
-        print("Loading ML dataset...")
-        ml_dataset = load_dataset()
+        # Load screener-filtered ML dataset (trained on quality stocks only)
+        screened_path = Path("data/ml_dataset_screened.parquet")
+        if screened_path.exists():
+            print("Loading screener-filtered ML dataset...")
+            ml_dataset = load_dataset(path=str(screened_path))
+        else:
+            print("Loading full ML dataset (screener-filtered not found)...")
+            ml_dataset = load_dataset()
         feature_cols = get_feature_cols(ml_dataset)
 
         # Rebalance dates

@@ -265,11 +265,25 @@ def build_training_dataset(
     end_year=2024,
     rebalance_freq="QS",
     forward_months=3,
+    screener_only=False,
+    criteria=None,
 ):
     """Build the full training dataset with features and forward returns.
 
-    Vectorized: computes features for all tickers at once per date.
+    If screener_only=True, only includes stocks that pass the screener
+    at each date. This trains the model to differentiate winners within
+    the quality universe rather than the broad market.
     """
+    from data.simfin_loader import get_all_fundamentals_at_date, get_tradeable_tickers_at_date
+
+    if screener_only:
+        from screener.criteria import ScreenCriteria, apply_screen
+        if criteria is None:
+            criteria = ScreenCriteria()
+        print(f"Building SCREENER-FILTERED dataset (only quality stocks)")
+    else:
+        print(f"Building FULL UNIVERSE dataset")
+
     derived = load_derived_annual()
     prices = load_prices()
 
@@ -298,10 +312,24 @@ def build_training_dataset(
         p0 = price_at_date.iloc[0]
         p1 = price_at_forward.iloc[0]
         fwd_returns = ((p1 / p0) - 1).dropna()
-        fwd_returns = fwd_returns[(fwd_returns > -1) & (fwd_returns < 5)]  # filter extremes
+        fwd_returns = fwd_returns[(fwd_returns > -1) & (fwd_returns < 5)]
 
         if fwd_returns.empty:
             continue
+
+        # Filter to screener-eligible tickers if requested
+        if screener_only:
+            tradeable = set(get_tradeable_tickers_at_date(date))
+            fundamentals = get_all_fundamentals_at_date(date)
+            fundamentals = fundamentals[fundamentals["Ticker"].isin(tradeable)]
+            screened = apply_screen(fundamentals, criteria)
+            if screened.empty:
+                print("  No stocks passed screen")
+                continue
+            eligible_tickers = set(screened["Ticker"].tolist())
+            print(f"  {len(eligible_tickers)} passed screener,", end=" ")
+        else:
+            eligible_tickers = None
 
         # Build features
         fund_features = build_fundamental_features(derived, date)
@@ -310,7 +338,11 @@ def build_training_dataset(
         # Combine
         combined = fund_features.join(price_features, how="inner")
 
-        # Add forward returns (only for tickers we have both features and returns)
+        # Filter to eligible tickers
+        if eligible_tickers is not None:
+            combined = combined[combined.index.isin(eligible_tickers)]
+
+        # Add forward returns
         tickers_with_data = combined.index.intersection(fwd_returns.index)
         combined = combined.loc[tickers_with_data]
         combined["forward_return_3m"] = fwd_returns[tickers_with_data]

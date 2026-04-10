@@ -16,14 +16,20 @@ from ml.model import WalkForwardModel, print_feature_importance, save_dataset, l
 
 
 def cmd_build(args):
+    screener_only = getattr(args, "screener_only", False)
     print("Building training dataset...")
-    print("This scans all tickers at each quarter — expect ~30 min.\n")
+    if screener_only:
+        print("Mode: SCREENER-FILTERED (only quality stocks)\n")
+    else:
+        print("Mode: FULL UNIVERSE\n")
     df = build_training_dataset(
         start_year=args.start_year,
         end_year=args.end_year,
         forward_months=3,
+        screener_only=screener_only,
     )
-    save_dataset(df)
+    output = "data/ml_dataset_screened.parquet" if screener_only else "data/ml_dataset.parquet"
+    save_dataset(df, path=output)
     print(f"\nDataset shape: {df.shape}")
     print(f"Date range: {df['date'].min()} to {df['date'].max()}")
     print(f"Unique tickers: {df['ticker'].nunique()}")
@@ -35,8 +41,10 @@ def cmd_build(args):
 
 
 def cmd_train(args):
-    print("Loading dataset...")
-    df = load_dataset()
+    screener_only = getattr(args, "screener_only", False)
+    path = "data/ml_dataset_screened.parquet" if screener_only else "data/ml_dataset.parquet"
+    print(f"Loading dataset from {path}...")
+    df = load_dataset(path=path)
     print(f"Dataset: {len(df)} samples, {df['date'].nunique()} dates, "
           f"{df['ticker'].nunique()} tickers\n")
 
@@ -145,11 +153,15 @@ def main():
     bp = sub.add_parser("build", help="Build training dataset")
     bp.add_argument("--start-year", type=int, default=2006)
     bp.add_argument("--end-year", type=int, default=2024)
+    bp.add_argument("--screener-only", action="store_true",
+                    help="Only include stocks that pass the quality screener")
 
     tp = sub.add_parser("train", help="Train and evaluate model")
     tp.add_argument("--train-years", type=int, default=5)
     tp.add_argument("--top-n", type=int, default=20)
     tp.add_argument("--n-estimators", type=int, default=300)
+    tp.add_argument("--screener-only", action="store_true",
+                    help="Use screener-filtered dataset")
 
     sub.add_parser("compare", help="Compare ML vs screener")
 
@@ -158,6 +170,7 @@ def main():
     fp.add_argument("--end-year", type=int, default=2024)
     fp.add_argument("--train-years", type=int, default=5)
     fp.add_argument("--top-n", type=int, default=20)
+    fp.add_argument("--screener-only", action="store_true")
 
     args = parser.parse_args()
 
