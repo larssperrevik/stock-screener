@@ -12,6 +12,7 @@ import pandas as pd
 import numpy as np
 import json
 from pathlib import Path
+from datetime import datetime
 
 from data.simfin_loader import (
     load_prices, get_all_fundamentals_at_date, get_tradeable_tickers_at_date,
@@ -409,7 +410,7 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Generate dashboard")
     parser.add_argument("--start", default="2005-01-01")
-    parser.add_argument("--end", default="2024-09-30")
+    parser.add_argument("--end", default="today")
     parser.add_argument("--freq", default="quarterly")
     parser.add_argument("--top-n", type=int, default=20)
     parser.add_argument("--min-roe", type=float, default=0.15)
@@ -421,7 +422,8 @@ if __name__ == "__main__":
     criteria = ScreenCriteria(
         min_roe=args.min_roe, min_roic=args.min_roic, min_piotroski=args.min_piotroski,
     )
+    end = datetime.now().strftime("%Y-%m-%d") if args.end == "today" else args.end
     generate_dashboard(
-        criteria=criteria, start=args.start, end=args.end,
+        criteria=criteria, start=args.start, end=end,
         freq=args.freq, top_n=args.top_n, output=args.output,
     )
