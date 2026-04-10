@@ -152,8 +152,15 @@ def build_fundamental_features(derived, as_of_date):
         return pd.Series(result)
 
     print("  Computing fundamental features...", end=" ", flush=True)
-    rolling_features = available.groupby("Ticker").apply(_compute_rolling_features, include_groups=False)
-    features = features.join(rolling_features)
+    rolling_list = []
+    for ticker, group in available.groupby("Ticker"):
+        row = _compute_rolling_features(group)
+        row.name = ticker
+        rolling_list.append(row)
+    if rolling_list:
+        rolling_features = pd.DataFrame(rolling_list)
+        rolling_features.index.name = "Ticker"
+        features = features.join(rolling_features)
     print(f"{len(features)} tickers")
 
     return features
