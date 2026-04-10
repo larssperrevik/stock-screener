@@ -1,4 +1,4 @@
-"""Fetch fundamental and price data from Financial Modeling Prep."""
+"""Fetch fundamental and price data from Financial Modeling Prep (stable API)."""
 
 import requests
 import pandas as pd
@@ -10,7 +10,7 @@ import os
 CACHE_DIR = Path(__file__).parent / "cache"
 CACHE_DIR.mkdir(exist_ok=True)
 
-FMP_BASE = "https://financialmodelingprep.com/api/v3"
+FMP_BASE = "https://financialmodelingprep.com/stable"
 
 
 def _api_key():
@@ -46,18 +46,15 @@ def get_fundamentals(ticker, use_cache=True):
             with open(cache) as f:
                 return json.load(f)
 
-    # Profile gives us most of what we need
-    profile = _fmp_get(f"profile/{ticker}")
+    profile = _fmp_get("profile", {"symbol": ticker})
     if not profile:
         raise ValueError(f"No data for {ticker}")
     p = profile[0]
 
-    # Key metrics for ratios not in profile
-    metrics = _fmp_get(f"key-metrics-ttm/{ticker}")
+    metrics = _fmp_get("key-metrics-ttm", {"symbol": ticker})
     m = metrics[0] if metrics else {}
 
-    # Ratios
-    ratios = _fmp_get(f"ratios-ttm/{ticker}")
+    ratios = _fmp_get("ratios-ttm", {"symbol": ticker})
     rt = ratios[0] if ratios else {}
 
     fundamentals = {
@@ -65,31 +62,30 @@ def get_fundamentals(ticker, use_cache=True):
         "name": p.get("companyName", ""),
         "sector": p.get("sector", ""),
         "industry": p.get("industry", ""),
-        "market_cap": p.get("mktCap"),
-        "pe_ratio": rt.get("peRatioTTM"),
-        "forward_pe": p.get("dcf"),  # not exact but a proxy
+        "market_cap": m.get("marketCap") or p.get("marketCap"),
+        "pe_ratio": rt.get("priceToEarningsRatioTTM"),
         "pb_ratio": rt.get("priceToBookRatioTTM"),
         "ps_ratio": rt.get("priceToSalesRatioTTM"),
         "dividend_yield": rt.get("dividendYieldTTM"),
-        "roe": rt.get("returnOnEquityTTM"),
-        "roa": rt.get("returnOnAssetsTTM"),
-        "debt_to_equity": rt.get("debtEquityRatioTTM"),
+        "roe": m.get("returnOnEquityTTM"),
+        "roa": m.get("returnOnAssetsTTM"),
+        "roic": m.get("returnOnInvestedCapitalTTM"),
+        "debt_to_equity": rt.get("debtToEquityRatioTTM"),
         "current_ratio": rt.get("currentRatioTTM"),
-        "free_cash_flow": m.get("freeCashFlowPerShareTTM"),
-        "operating_cash_flow": m.get("operatingCashFlowPerShareTTM"),
-        "total_revenue": m.get("revenuePerShareTTM"),
-        "net_income": m.get("netIncomePerShareTTM"),
-        "total_debt": None,  # not directly in TTM endpoint
-        "total_cash": m.get("cashPerShareTTM"),
-        "earnings_growth": m.get("earningsYieldTTM"),
-        "revenue_growth": rt.get("revenuePerShareTTM"),
         "gross_margins": rt.get("grossProfitMarginTTM"),
         "operating_margins": rt.get("operatingProfitMarginTTM"),
         "profit_margins": rt.get("netProfitMarginTTM"),
         "enterprise_value": m.get("enterpriseValueTTM"),
-        "ebitda": m.get("ebitdaPerShareTTM"),
-        "roic": rt.get("returnOnCapitalEmployedTTM"),
+        "ev_ebitda": m.get("evToEBITDATTM"),
         "fcf_yield": m.get("freeCashFlowYieldTTM"),
+        "earnings_yield": m.get("earningsYieldTTM"),
+        "net_income": m.get("netIncomePerShareTTM") if "netIncomePerShareTTM" in m else None,
+        "operating_cash_flow": m.get("operatingCashFlowPerShareTTM") if "operatingCashFlowPerShareTTM" in m else None,
+        "free_cash_flow": m.get("freeCashFlowPerShareTTM") if "freeCashFlowPerShareTTM" in m else None,
+        "peg_ratio": rt.get("priceToEarningsGrowthRatioTTM"),
+        "return_on_capital_employed": m.get("returnOnCapitalEmployedTTM"),
+        "income_quality": m.get("incomeQualityTTM"),
+        "graham_number": m.get("grahamNumberTTM"),
     }
 
     with open(cache, "w") as f:
@@ -100,9 +96,9 @@ def get_fundamentals(ticker, use_cache=True):
 
 def get_financials(ticker):
     """Get income statement, balance sheet, cash flow as DataFrames."""
-    income = _fmp_get(f"income-statement/{ticker}", {"period": "annual", "limit": 10})
-    balance = _fmp_get(f"balance-sheet-statement/{ticker}", {"period": "annual", "limit": 10})
-    cashflow = _fmp_get(f"cash-flow-statement/{ticker}", {"period": "annual", "limit": 10})
+    income = _fmp_get("income-statement", {"symbol": ticker, "period": "annual", "limit": 10})
+    balance = _fmp_get("balance-sheet-statement", {"symbol": ticker, "period": "annual", "limit": 10})
+    cashflow = _fmp_get("cash-flow-statement", {"symbol": ticker, "period": "annual", "limit": 10})
     return {
         "income": pd.DataFrame(income),
         "balance": pd.DataFrame(balance),
@@ -124,17 +120,17 @@ def get_prices(ticker, start="2000-01-01", end=None):
             return df
 
     end = end or datetime.now().strftime("%Y-%m-%d")
-    data = _fmp_get(f"historical-price-full/{ticker}", {"from": start, "to": end})
-    if not data or "historical" not in data:
+    params = {"symbol": ticker, "from": start, "to": end}
+    data = _fmp_get("historical-price-eod/full", params)
+    if not data:
         return pd.DataFrame()
 
-    df = pd.DataFrame(data["historical"])
+    df = pd.DataFrame(data)
     df["date"] = pd.to_datetime(df["date"])
     df = df.set_index("date").sort_index()
-    # Rename to standard columns
     df = df.rename(columns={
         "open": "Open", "high": "High", "low": "Low",
-        "close": "Close", "adjClose": "Adj Close", "volume": "Volume",
+        "close": "Close", "volume": "Volume",
     })
     if not df.empty:
         df.to_parquet(cache)
@@ -142,12 +138,7 @@ def get_prices(ticker, start="2000-01-01", end=None):
 
 
 def get_sp500_tickers():
-    """Get current S&P 500 constituents from FMP."""
-    data = _fmp_get("sp500_constituent")
-    return sorted([d["symbol"] for d in data])
-
-
-def get_historical_sp500():
-    """Get historical S&P 500 additions/removals for survivorship bias handling."""
-    data = _fmp_get("historical/sp500_constituent")
-    return pd.DataFrame(data)
+    """Get current S&P 500 constituents from Wikipedia (free, no API needed)."""
+    table = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")
+    df = table[0]
+    return sorted(df["Symbol"].str.replace(".", "-", regex=False).tolist())
