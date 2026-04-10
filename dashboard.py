@@ -21,7 +21,7 @@ from data.simfin_loader import (
 from data.live_prices import get_live_prices
 from screener.criteria import ScreenCriteria, apply_screen
 from backtest.engine import BacktestEngine
-from combined_strategy import CombinedStrategy
+from backtest.event_engine import EventDrivenEngine
 from metrics.performance import (
     cagr, sharpe_ratio, sortino_ratio, max_drawdown, ulcer_index, full_report
 )
@@ -143,7 +143,6 @@ def generate_dashboard(
     end="2024-09-30",
     freq="quarterly",
     top_n=20,
-    min_confidence=0.20,
     output="dashboard.html",
 ):
     if criteria is None:
@@ -161,25 +160,29 @@ def generate_dashboard(
     report = result["report"]
     holdings = result["holdings_history"]
 
-    # === Run combined strategy (screener + ML) ===
-    # Combined starts at 2011 because ML needs 5 years of training data
+    # === Run event-driven strategy ===
     combined_start = "2011-01-01"
-    print("\n\nRunning combined screener + ML strategy...")
+    print("\n\nRunning event-driven strategy...")
     try:
-        combined = CombinedStrategy(
-            criteria=criteria, top_n=top_n, min_confidence=min_confidence,
+        event_engine = EventDrivenEngine(
+            criteria=criteria, max_positions=15, max_hold_days=540,
+            min_hold_days=60, buy_threshold=40, sell_threshold=20,
             start_date=combined_start, end_date=end,
         )
-        combined_result = combined.run()
-        comb_ret = combined_result["portfolio_returns"]
-        comb_report = combined_result["report"]
-        comb_holdings = combined_result["holdings_history"]
+        event_result = event_engine.run()
+        comb_ret = event_result["portfolio_returns"]
+        comb_report = event_result["report"]
+        event_trades = event_result.get("trades", [])
         has_combined = True
+
+        # Build holdings list from trades for display
+        comb_holdings = []
     except Exception as e:
-        print(f"Combined strategy failed: {e}")
+        print(f"Event-driven strategy failed: {e}")
         has_combined = False
         comb_ret = None
         comb_report = {}
+        event_trades = []
         comb_holdings = []
 
     # === Latest screen with live returns ===
@@ -207,9 +210,9 @@ def generate_dashboard(
     roll_port = _rolling_returns_json(port_ret_trimmed, 252, "Screener (1Y)")
     roll_bench = _rolling_returns_json(bench_ret_trimmed, 252, "SPY (1Y)") if bench_ret_trimmed is not None else None
 
-    cum_combined = _cumulative_returns_json(comb_ret, "Screener + ML") if has_combined else None
-    dd_combined = _drawdown_json(comb_ret, "Screener + ML") if has_combined else None
-    roll_combined = _rolling_returns_json(comb_ret, 252, "Screener + ML (1Y)") if has_combined else None
+    cum_combined = _cumulative_returns_json(comb_ret, "Event-Driven") if has_combined else None
+    dd_combined = _drawdown_json(comb_ret, "Event-Driven") if has_combined else None
+    roll_combined = _rolling_returns_json(comb_ret, 252, "Event-Driven (1Y)") if has_combined else None
 
     holdings_data = []
     for h in holdings:
@@ -218,17 +221,17 @@ def generate_dashboard(
             "tickers": h["tickers"],
         })
 
-    # Combined holdings with ML scores
-    comb_holdings_data = []
-    if has_combined:
-        for h in comb_holdings:
-            scores = h.get("scores", {})
-            tickers_with_scores = [(t, scores.get(t, 0)) for t in h["tickers"]]
-            comb_holdings_data.append({
-                "date": h["date"].strftime("%Y-%m-%d"),
-                "tickers": h["tickers"],
-                "scores": scores,
-                "cash": h.get("cash", False),
+    # Event-driven: show recent trades
+    event_trades_data = []
+    if has_combined and event_trades:
+        for t in sorted(event_trades, key=lambda x: x.exit_date, reverse=True)[:20]:
+            event_trades_data.append({
+                "ticker": t.ticker,
+                "entry": t.entry_date.strftime("%Y-%m-%d"),
+                "exit": t.exit_date.strftime("%Y-%m-%d"),
+                "return": t.return_pct,
+                "hold_days": t.hold_days,
+                "reason": t.reason,
             })
 
     latest_data = latest.to_dict("records") if not latest.empty else []
@@ -242,14 +245,13 @@ def generate_dashboard(
         "spy_report": {k: round(v, 4) if isinstance(v, float) else v for k, v in spy_report.items()},
         "has_combined": has_combined,
         "holdings": holdings_data,
-        "combined_holdings": comb_holdings_data,
+        "event_trades": event_trades_data,
         "latest_screen": latest_data,
         "last_rebalance": last_rebal,
         "config": {
             "start": start, "end": end, "freq": freq, "top_n": top_n,
             "min_roe": criteria.min_roe, "min_roic": criteria.min_roic,
             "min_piotroski": criteria.min_piotroski,
-            "min_confidence": min_confidence,
         },
     }
 
@@ -299,16 +301,18 @@ def _build_html(data):
         more = f" +{len(h['tickers'])-10}" if len(h["tickers"]) > 10 else ""
         holdings_rows += f"<tr><td>{h['date']}</td><td>{tickers_str}{more}</td></tr>\n"
 
-    # Combined holdings with ML scores
-    comb_holdings_rows = ""
-    for h in reversed(data.get("combined_holdings", [])[-8:]):
-        if h.get("cash"):
-            comb_holdings_rows += f"<tr><td>{h['date']}</td><td class='warn'>CASH</td></tr>\n"
-        else:
-            scores = h.get("scores", {})
-            parts = [f"{t}(<span class='ml-score'>{scores.get(t,0):.0%}</span>)" for t in h["tickers"][:8]]
-            more = f" +{len(h['tickers'])-8}" if len(h["tickers"]) > 8 else ""
-            comb_holdings_rows += f"<tr><td>{h['date']}</td><td>{', '.join(parts)}{more}</td></tr>\n"
+    # Event-driven trades table
+    event_trades_rows = ""
+    for t in data.get("event_trades", []):
+        ret = t.get("return", 0)
+        ret_class = "positive" if ret > 0 else "negative"
+        event_trades_rows += (
+            f"<tr><td><strong>{t['ticker']}</strong></td>"
+            f"<td>{t['entry']}</td><td>{t['exit']}</td>"
+            f"<td>{t['hold_days']}d</td>"
+            f'<td class="{ret_class}">{_pct(ret)}</td>'
+            f"<td>{t['reason']}</td></tr>\n"
+        )
 
     excess = report.get("excess_return", 0)
     excess_class = "highlight" if excess > 0 else "danger"
@@ -366,10 +370,10 @@ def _build_html(data):
 </head>
 <body>
 
-<h1>Value Investing Screener + ML</h1>
-<p class="subtitle">Buffett/Munger quality screen + LightGBM timing &middot; {config['start']} to {config['end']} &middot;
-   {config['freq']} rebalance &middot; Top {config['top_n']} &middot;
-   ML confidence &ge; {_pct(config.get('min_confidence', 0.2), 0)}</p>
+<h1>Value Investing Dashboard</h1>
+<p class="subtitle">Buffett/Munger quality screen + event-driven engine &middot; {config['start']} to {config['end']} &middot;
+   Screener: {config['freq']}, top {config['top_n']} &middot;
+   Event: report-triggered, 15 positions, 540d max hold</p>
 
 <h2>Strategy Comparison</h2>
 <div class="three-col">
@@ -383,7 +387,7 @@ def _build_html(data):
     <div class="stat"><span>Volatility</span><span class="val">{_pct(report['volatility'])}</span></div>
     <div class="stat"><span>vs SPY</span><span class="val {excess_class}">{_pct(excess)}</span></div>
   </div>
-  {'<div class="strategy-card combined"><h3>Screener + ML</h3>' + f"""
+  {'<div class="strategy-card combined"><h3>Event-Driven</h3>' + f"""
     <div class="stat"><span>CAGR</span><span class="val">{_pct(comb_report.get('cagr'))}</span></div>
     <div class="stat"><span>Total Return</span><span class="val">{_pct(comb_report.get('total_return'), 0)}</span></div>
     <div class="stat"><span>Sharpe</span><span class="val">{comb_report.get('sharpe', 0):.2f}</span></div>
@@ -432,11 +436,11 @@ def _build_html(data):
 </div>
 </div>
 <div>
-<h2>Screener + ML Holdings</h2>
+<h2>Event-Driven Trades (Recent)</h2>
 <div class="table-container">
 <table>
-<thead><tr><th>Date</th><th>Holdings (ML score)</th></tr></thead>
-<tbody>{comb_holdings_rows}</tbody>
+<thead><tr><th>Ticker</th><th>Entry</th><th>Exit</th><th>Hold</th><th>Return</th><th>Reason</th></tr></thead>
+<tbody>{event_trades_rows}</tbody>
 </table>
 </div>
 </div>
@@ -532,8 +536,6 @@ if __name__ == "__main__":
     parser.add_argument("--min-roe", type=float, default=0.15)
     parser.add_argument("--min-roic", type=float, default=0.10)
     parser.add_argument("--min-piotroski", type=int, default=5)
-    parser.add_argument("--min-confidence", type=float, default=0.20,
-                        help="ML confidence threshold for combined strategy")
     parser.add_argument("-o", "--output", default="dashboard.html")
     args = parser.parse_args()
 
@@ -543,6 +545,5 @@ if __name__ == "__main__":
     end = datetime.now().strftime("%Y-%m-%d") if args.end == "today" else args.end
     generate_dashboard(
         criteria=criteria, start=args.start, end=end,
-        freq=args.freq, top_n=args.top_n, min_confidence=args.min_confidence,
-        output=args.output,
+        freq=args.freq, top_n=args.top_n, output=args.output,
     )

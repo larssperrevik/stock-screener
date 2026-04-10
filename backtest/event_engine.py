@@ -201,25 +201,29 @@ class EventDrivenEngine:
         self.end_date = pd.Timestamp(end_date)
         self.benchmark = benchmark
 
-    def run(self):
+    def run(self, quiet=False):
         """Run the event-driven backtest."""
         derived = load_derived_annual()
         prices = load_prices()
 
-        print("Building price matrix...")
+        if not quiet:
+            print("Building price matrix...")
         price_matrix = prices.pivot_table(
             index="Date", columns="Ticker", values="Adj. Close", aggfunc="first"
         ).ffill(limit=5)
 
         # Also keep the raw prices for valuation ratios
-        print("Indexing price data by ticker...")
+        if not quiet:
+            print("Indexing price data by ticker...")
         price_by_ticker = {}
         for ticker, group in prices.groupby("Ticker"):
             price_by_ticker[ticker] = group.set_index("Date").sort_index()
 
-        # Index derived data by ticker
+        # Index derived data by ticker (exclude delisted/acquired)
         derived_by_ticker = {}
         for ticker, group in derived.groupby("Ticker"):
+            if "_delisted" in ticker or "_old" in ticker:
+                continue
             derived_by_ticker[ticker] = group.sort_values("Publish Date")
 
         # Track which reports we've already seen (to detect new ones)
@@ -239,11 +243,12 @@ class EventDrivenEngine:
             (price_matrix.index <= self.end_date)
         ]
 
-        print(f"\nSimulating {len(trading_days)} trading days from "
-              f"{self.start_date.strftime('%Y-%m-%d')} to {self.end_date.strftime('%Y-%m-%d')}")
-        print(f"  Max positions: {self.max_positions}, Hold: {self.min_hold_days}-{self.max_hold_days} days")
-        print(f"  Buy threshold: {self.buy_threshold}, Sell threshold: {self.sell_threshold}")
-        print()
+        if not quiet:
+            print(f"\nSimulating {len(trading_days)} trading days from "
+                  f"{self.start_date.strftime('%Y-%m-%d')} to {self.end_date.strftime('%Y-%m-%d')}")
+            print(f"  Max positions: {self.max_positions}, Hold: {self.min_hold_days}-{self.max_hold_days} days")
+            print(f"  Buy threshold: {self.buy_threshold}, Sell threshold: {self.sell_threshold}")
+            print()
 
         last_log_month = None
         new_reports_today = []
@@ -256,7 +261,10 @@ class EventDrivenEngine:
                 (derived["Publish Date"] <= day)
             ]
             for _, row in day_reports.iterrows():
-                key = (row["Ticker"], row["Publish Date"])
+                ticker = row["Ticker"]
+                if "_delisted" in ticker or "_old" in ticker:
+                    continue
+                key = (ticker, row["Publish Date"])
                 if key not in seen_reports:
                     seen_reports.add(key)
                     new_reports_today.append(row)
@@ -391,15 +399,16 @@ class EventDrivenEngine:
             daily_returns.append({"date": day, "return": port_ret, "n_positions": len(positions)})
 
             # Monthly logging
-            month_key = (day.year, day.month)
-            if month_key != last_log_month:
-                n_new = len(new_reports_today)
-                held = ", ".join(sorted(positions.keys())[:8])
-                more = f" +{len(positions)-8}" if len(positions) > 8 else ""
-                if n_new > 0 or day.day <= 3:
-                    print(f"  {day.strftime('%Y-%m-%d')}: {len(positions)} positions, "
-                          f"{n_new} new reports | {held}{more}")
-                last_log_month = month_key
+            if not quiet:
+                month_key = (day.year, day.month)
+                if month_key != last_log_month:
+                    n_new = len(new_reports_today)
+                    held = ", ".join(sorted(positions.keys())[:8])
+                    more = f" +{len(positions)-8}" if len(positions) > 8 else ""
+                    if n_new > 0 or day.day <= 3:
+                        print(f"  {day.strftime('%Y-%m-%d')}: {len(positions)} positions, "
+                              f"{n_new} new reports | {held}{more}")
+                    last_log_month = month_key
 
         # === RESULTS ===
         ret_df = pd.DataFrame(daily_returns).set_index("date")
@@ -412,7 +421,8 @@ class EventDrivenEngine:
             bench_returns = bench_daily.reindex(portfolio_returns.index).fillna(0)
 
         report = full_report(portfolio_returns, bench_returns)
-        print_report(report)
+        if not quiet:
+            print_report(report)
 
         # Trade statistics
         if trades:
@@ -422,26 +432,26 @@ class EventDrivenEngine:
             avg_win = trade_df.loc[trade_df["return_pct"] > 0, "return_pct"].mean()
             avg_loss = trade_df.loc[trade_df["return_pct"] <= 0, "return_pct"].mean()
 
-            print(f"\n  Total trades: {len(trades)}")
-            print(f"  Avg hold period: {avg_hold:.0f} days")
-            print(f"  Win rate: {win_rate:.0%}")
-            print(f"  Avg win: {avg_win:+.1%}")
-            print(f"  Avg loss: {avg_loss:+.1%}")
-            print(f"  Payoff ratio: {abs(avg_win/avg_loss):.2f}" if avg_loss != 0 else "")
+            if not quiet:
+                print(f"\n  Total trades: {len(trades)}")
+                print(f"  Avg hold period: {avg_hold:.0f} days")
+                print(f"  Win rate: {win_rate:.0%}")
+                print(f"  Avg win: {avg_win:+.1%}")
+                print(f"  Avg loss: {avg_loss:+.1%}")
+                print(f"  Payoff ratio: {abs(avg_win/avg_loss):.2f}" if avg_loss != 0 else "")
 
-            # Sell reasons
-            print(f"\n  Sell reasons:")
-            for reason, count in trade_df["reason"].value_counts().items():
-                avg_ret = trade_df.loc[trade_df["reason"] == reason, "return_pct"].mean()
-                print(f"    {reason}: {count} trades, avg return {avg_ret:+.1%}")
+                print(f"\n  Sell reasons:")
+                for reason, count in trade_df["reason"].value_counts().items():
+                    avg_ret = trade_df.loc[trade_df["reason"] == reason, "return_pct"].mean()
+                    print(f"    {reason}: {count} trades, avg return {avg_ret:+.1%}")
 
-        # Position count over time
         avg_pos = ret_df["n_positions"].mean()
         max_pos = ret_df["n_positions"].max()
         pct_invested = (ret_df["n_positions"] > 0).mean()
-        print(f"\n  Avg positions: {avg_pos:.1f}")
-        print(f"  Max positions: {max_pos}")
-        print(f"  Time invested: {pct_invested:.0%}")
+        if not quiet:
+            print(f"\n  Avg positions: {avg_pos:.1f}")
+            print(f"  Max positions: {max_pos}")
+            print(f"  Time invested: {pct_invested:.0%}")
 
         return {
             "portfolio_returns": portfolio_returns,
@@ -485,9 +495,91 @@ class EventDrivenEngine:
         return True
 
 
+def sweep_thresholds():
+    """Run parameter sweep to find optimal thresholds."""
+    from itertools import product
+
+    buy_thresholds = [40, 45, 50, 55, 60]
+    sell_thresholds = [20, 25, 30, 35]
+    max_positions_list = [15, 20, 25]
+    max_hold_list = [270, 365, 540]
+
+    criteria = ScreenCriteria()
+    results = []
+
+    total = len(buy_thresholds) * len(sell_thresholds) * len(max_positions_list) * len(max_hold_list)
+    i = 0
+
+    for buy_t, sell_t, max_pos, max_hold in product(
+        buy_thresholds, sell_thresholds, max_positions_list, max_hold_list
+    ):
+        if sell_t >= buy_t:
+            continue
+        i += 1
+        print(f"\n[{i}/{total}] buy={buy_t} sell={sell_t} pos={max_pos} hold={max_hold}d", end=" ")
+
+        engine = EventDrivenEngine(
+            criteria=criteria,
+            max_positions=max_pos,
+            max_hold_days=max_hold,
+            buy_threshold=buy_t,
+            sell_threshold=sell_t,
+        )
+        try:
+            result = engine.run(quiet=True)
+            r = result["report"]
+            n_trades = len(result["trades"])
+            print(f"=> CAGR={r['cagr']:.2%} Sharpe={r['sharpe']:.2f} "
+                  f"Sortino={r['sortino']:.2f} MaxDD={r['max_drawdown']:.2%} "
+                  f"Trades={n_trades}")
+            results.append({
+                "buy_threshold": buy_t,
+                "sell_threshold": sell_t,
+                "max_positions": max_pos,
+                "max_hold_days": max_hold,
+                "cagr": r["cagr"],
+                "sharpe": r["sharpe"],
+                "sortino": r["sortino"],
+                "max_drawdown": r["max_drawdown"],
+                "volatility": r["volatility"],
+                "excess_return": r.get("excess_return", 0),
+                "n_trades": n_trades,
+            })
+        except Exception as e:
+            print(f"=> FAILED: {e}")
+
+    if not results:
+        print("No results!")
+        return
+
+    df = pd.DataFrame(results)
+
+    # Rank by composite: high sortino + low drawdown
+    df["composite"] = df["sortino"] - df["max_drawdown"].abs() * 2
+    df = df.sort_values("composite", ascending=False)
+
+    print("\n\n" + "=" * 80)
+    print("TOP 10 PARAMETER COMBINATIONS (by Sortino + drawdown penalty)")
+    print("=" * 80)
+    for _, row in df.head(10).iterrows():
+        print(f"  buy={row['buy_threshold']:.0f} sell={row['sell_threshold']:.0f} "
+              f"pos={row['max_positions']:.0f} hold={row['max_hold_days']:.0f}d | "
+              f"CAGR={row['cagr']:.2%} Sharpe={row['sharpe']:.2f} "
+              f"Sortino={row['sortino']:.2f} MaxDD={row['max_drawdown']:.2%} "
+              f"Trades={row['n_trades']:.0f}")
+
+    best = df.iloc[0]
+    print(f"\nBest: buy={best['buy_threshold']:.0f} sell={best['sell_threshold']:.0f} "
+          f"pos={best['max_positions']:.0f} hold={best['max_hold_days']:.0f}d")
+
+    df.to_csv("data/sweep_results.csv", index=False)
+    print("Saved to data/sweep_results.csv")
+
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Event-driven backtest")
+    parser.add_argument("--sweep", action="store_true", help="Run parameter sweep")
     parser.add_argument("--start", default="2011-01-01")
     parser.add_argument("--end", default="2024-09-30")
     parser.add_argument("--max-positions", type=int, default=20)
@@ -500,17 +592,20 @@ if __name__ == "__main__":
     parser.add_argument("--min-piotroski", type=int, default=5)
     args = parser.parse_args()
 
-    criteria = ScreenCriteria(
-        min_roe=args.min_roe, min_roic=args.min_roic, min_piotroski=args.min_piotroski,
-    )
-    engine = EventDrivenEngine(
-        criteria=criteria,
-        max_positions=args.max_positions,
-        max_hold_days=args.max_hold_days,
-        min_hold_days=args.min_hold_days,
-        buy_threshold=args.buy_threshold,
-        sell_threshold=args.sell_threshold,
-        start_date=args.start,
-        end_date=args.end,
-    )
-    engine.run()
+    if args.sweep:
+        sweep_thresholds()
+    else:
+        criteria = ScreenCriteria(
+            min_roe=args.min_roe, min_roic=args.min_roic, min_piotroski=args.min_piotroski,
+        )
+        engine = EventDrivenEngine(
+            criteria=criteria,
+            max_positions=args.max_positions,
+            max_hold_days=args.max_hold_days,
+            min_hold_days=args.min_hold_days,
+            buy_threshold=args.buy_threshold,
+            sell_threshold=args.sell_threshold,
+            start_date=args.start,
+            end_date=args.end,
+        )
+        engine.run()
