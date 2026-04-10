@@ -138,7 +138,7 @@ def get_prices(ticker, start="2000-01-01", end=None):
 
 
 def get_sp500_tickers():
-    """Get current S&P 500 constituents from Wikipedia (free, no API needed)."""
-    table = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")
-    df = table[0]
-    return sorted(df["Symbol"].str.replace(".", "-", regex=False).tolist())
+    """Get S&P 500 constituents from local file."""
+    ticker_file = Path(__file__).parent / "sp500_tickers.json"
+    with open(ticker_file) as f:
+        return json.load(f)
