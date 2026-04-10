@@ -1,4 +1,7 @@
-"""Screening criteria inspired by value investing principles."""
+"""Screening criteria inspired by value investing principles.
+
+Works with SimFin derived-annual data columns.
+"""
 
 import pandas as pd
 from dataclasses import dataclass
@@ -11,81 +14,65 @@ class ScreenCriteria:
     max_pb_ratio: float = 5.0
     min_roe: float = 0.15
     min_roa: float = 0.07
-    max_debt_to_equity: float = 1.5       # FMP returns ratio not percentage
+    max_debt_ratio: float = 0.60           # Total liabilities / Total assets
     min_current_ratio: float = 1.2
     min_operating_margin: float = 0.15
-    min_fcf_yield: float = 0.04
     min_gross_margin: float = 0.30
+    min_fcf_to_net_income: float = 0.8     # Cash conversion
+    min_piotroski: int = 5                 # Pre-computed in SimFin
+    min_roic: float = 0.10
 
 
-def piotroski_score(f, prior=None):
-    """Compute Piotroski F-Score (0-9). Higher = healthier."""
-    score = 0
-    if f.get("roa") and f["roa"] > 0:
-        score += 1
-    if f.get("operating_cash_flow") and f["operating_cash_flow"] > 0:
-        score += 1
-    # Quality of earnings: cash flow > net income (using income_quality > 1)
-    if f.get("income_quality") and f["income_quality"] > 1:
-        score += 1
-    if f.get("current_ratio") and f["current_ratio"] > 1:
-        score += 1
-    if f.get("profit_margins") and f["profit_margins"] > 0:
-        score += 1
-    if prior:
-        if f.get("roa") and prior.get("roa") and f["roa"] > prior["roa"]:
-            score += 1
-        if (f.get("debt_to_equity") and prior.get("debt_to_equity")
-                and f["debt_to_equity"] < prior["debt_to_equity"]):
-            score += 1
-        if (f.get("gross_margins") and prior.get("gross_margins")
-                and f["gross_margins"] > prior["gross_margins"]):
-            score += 1
-        if (f.get("operating_margins") and prior.get("operating_margins")
-                and f["operating_margins"] > prior["operating_margins"]):
-            score += 1
-    return score
+def apply_screen(fundamentals_df, criteria=None):
+    """Apply screening criteria to a SimFin derived-annual DataFrame.
 
+    Input: DataFrame from get_all_fundamentals_at_date() with columns like
+    'Gross Profit Margin', 'Operating Margin', 'Return on Equity', etc.
 
-def apply_screen(fundamentals_list, criteria):
-    """Apply screening criteria. Returns DataFrame ranked by composite score."""
-    rows = []
-    for f in fundamentals_list:
-        if not f.get("market_cap") or f["market_cap"] < criteria.min_market_cap:
-            continue
-        if f.get("pe_ratio") is not None and (f["pe_ratio"] > criteria.max_pe_ratio or f["pe_ratio"] < 0):
-            continue
-        if f.get("pb_ratio") is not None and f["pb_ratio"] > criteria.max_pb_ratio:
-            continue
-        if f.get("roe") is not None and f["roe"] < criteria.min_roe:
-            continue
-        if f.get("roa") is not None and f["roa"] < criteria.min_roa:
-            continue
-        if f.get("debt_to_equity") is not None and f["debt_to_equity"] > criteria.max_debt_to_equity:
-            continue
-        if f.get("current_ratio") is not None and f["current_ratio"] < criteria.min_current_ratio:
-            continue
-        if f.get("operating_margins") is not None and f["operating_margins"] < criteria.min_operating_margin:
-            continue
-        if f.get("fcf_yield") is not None and f["fcf_yield"] < criteria.min_fcf_yield:
-            continue
-        if f.get("gross_margins") is not None and f["gross_margins"] < criteria.min_gross_margin:
-            continue
+    Returns filtered and ranked DataFrame.
+    """
+    if criteria is None:
+        criteria = ScreenCriteria()
 
-        f["piotroski"] = piotroski_score(f)
-        rows.append(f)
+    df = fundamentals_df.copy()
 
-    if not rows:
-        return pd.DataFrame()
+    # Apply hard filters
+    if "Gross Profit Margin" in df.columns:
+        df = df[df["Gross Profit Margin"].isna() | (df["Gross Profit Margin"] >= criteria.min_gross_margin)]
+    if "Operating Margin" in df.columns:
+        df = df[df["Operating Margin"].isna() | (df["Operating Margin"] >= criteria.min_operating_margin)]
+    if "Return on Equity" in df.columns:
+        df = df[df["Return on Equity"].isna() | (df["Return on Equity"] >= criteria.min_roe)]
+    if "Return on Assets" in df.columns:
+        df = df[df["Return on Assets"].isna() | (df["Return on Assets"] >= criteria.min_roa)]
+    if "Current Ratio" in df.columns:
+        df = df[df["Current Ratio"].isna() | (df["Current Ratio"] >= criteria.min_current_ratio)]
+    if "Debt Ratio" in df.columns:
+        df = df[df["Debt Ratio"].isna() | (df["Debt Ratio"] <= criteria.max_debt_ratio)]
+    if "Piotroski F-Score" in df.columns:
+        df = df[df["Piotroski F-Score"].isna() | (df["Piotroski F-Score"] >= criteria.min_piotroski)]
+    if "Return On Invested Capital" in df.columns:
+        df = df[df["Return On Invested Capital"].isna() | (df["Return On Invested Capital"] >= criteria.min_roic)]
+    if "Free Cash Flow to Net Income" in df.columns:
+        df = df[df["Free Cash Flow to Net Income"].isna() | (df["Free Cash Flow to Net Income"] >= criteria.min_fcf_to_net_income)]
 
-    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+
+    # Composite ranking
     rank_cols = []
-    for col, ascending in [("fcf_yield", False), ("roe", False),
-                           ("earnings_yield", False), ("piotroski", False),
-                           ("debt_to_equity", True), ("roic", False)]:
+    for col, ascending in [
+        ("Return On Invested Capital", False),
+        ("Return on Equity", False),
+        ("Piotroski F-Score", False),
+        ("Gross Profit Margin", False),
+        ("Operating Margin", False),
+        ("Debt Ratio", True),
+        ("Free Cash Flow to Net Income", False),
+    ]:
         if col in df.columns and df[col].notna().any():
-            df[f"{col}_rank"] = df[col].rank(ascending=ascending, na_option="bottom")
-            rank_cols.append(f"{col}_rank")
+            df[f"_rank_{col}"] = df[col].rank(ascending=ascending, na_option="bottom")
+            rank_cols.append(f"_rank_{col}")
 
     if rank_cols:
         df["composite_rank"] = df[rank_cols].mean(axis=1)
