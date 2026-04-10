@@ -4,3 +4,4 @@ __pycache__/
 *.egg-info/
 data/cache/
 .ipynb_checkpoints/
+config.json
