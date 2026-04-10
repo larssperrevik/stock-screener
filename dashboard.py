@@ -27,28 +27,28 @@ from metrics.performance import (
 )
 
 
+def _to_xy_json(index, values):
+    """Convert to [{x: date, y: value}, ...] for Chart.js time axis."""
+    return [{"x": d.strftime("%Y-%m-%d"), "y": round(float(v), 4)}
+            for d, v in zip(index, values)]
+
+
 def _cumulative_returns_json(returns, label):
     cum = (1 + returns).cumprod()
-    dates = [d.strftime("%Y-%m-%d") for d in cum.index]
-    values = [round(float(v), 4) for v in cum.values]
-    return {"label": label, "dates": dates, "values": values}
+    return {"label": label, "data": _to_xy_json(cum.index, cum.values)}
 
 
 def _drawdown_json(returns, label):
     cum = (1 + returns).cumprod()
     peak = cum.cummax()
     dd = (cum - peak) / peak
-    dates = [d.strftime("%Y-%m-%d") for d in dd.index]
-    values = [round(float(v), 4) for v in dd.values]
-    return {"label": label, "dates": dates, "values": values}
+    return {"label": label, "data": _to_xy_json(dd.index, dd.values)}
 
 
 def _rolling_returns_json(returns, window, label):
     roll = (1 + returns).rolling(window).apply(lambda x: x.prod() ** (252/window) - 1, raw=True)
     roll = roll.dropna()
-    dates = [d.strftime("%Y-%m-%d") for d in roll.index]
-    values = [round(float(v), 4) for v in roll.values]
-    return {"label": label, "dates": dates, "values": values}
+    return {"label": label, "data": _to_xy_json(roll.index, roll.values)}
 
 
 def latest_screen_with_returns(criteria=None, screen_date="2024-07-01"):
@@ -453,10 +453,9 @@ const rollData = {roll_json};
 new Chart(document.getElementById('cumChart'), {{
   type: 'line',
   data: {{
-    labels: cumData[0].dates,
     datasets: cumData.map((d, i) => ({{
       label: d.label,
-      data: d.values,
+      data: d.data,
       borderColor: colors[i % colors.length].line,
       backgroundColor: colors[i % colors.length].fill,
       fill: i === 0, borderWidth: 1.5, pointRadius: 0,
@@ -469,10 +468,9 @@ new Chart(document.getElementById('cumChart'), {{
 new Chart(document.getElementById('ddChart'), {{
   type: 'line',
   data: {{
-    labels: ddData[0].dates,
     datasets: ddData.map((d, i) => ({{
       label: d.label,
-      data: d.values,
+      data: d.data,
       borderColor: ddColors[i % ddColors.length].line,
       backgroundColor: ddColors[i % ddColors.length].fill,
       fill: true, borderWidth: 1.5, pointRadius: 0,
@@ -488,10 +486,9 @@ new Chart(document.getElementById('ddChart'), {{
 new Chart(document.getElementById('rollChart'), {{
   type: 'line',
   data: {{
-    labels: rollData[0].dates,
     datasets: rollData.map((d, i) => ({{
       label: d.label,
-      data: d.values,
+      data: d.data,
       borderColor: colors[i % colors.length].line,
       borderWidth: 1.5, pointRadius: 0, fill: false,
     }}))
