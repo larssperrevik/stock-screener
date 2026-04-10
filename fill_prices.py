@@ -109,7 +109,19 @@ def _get_priority_tickers():
     return sorted(tickers)
 
 
-def fill_prices(tickers=None, all_sp500=False):
+def _get_all_active_tickers():
+    """Get all tickers that were actively trading near SimFin's last date."""
+    prices = load_prices()
+    last_date = prices["Date"].max()
+    cutoff = last_date - pd.Timedelta(days=30)
+    recent = prices[prices["Date"] >= cutoff]
+    tickers = sorted(recent["Ticker"].unique().tolist())
+    # Filter out delisted tickers (they have _delisted suffix in SimFin)
+    tickers = [t for t in tickers if "_delisted" not in t]
+    return tickers
+
+
+def fill_prices(tickers=None, all_sp500=False, priority_only=False):
     api_key = _api_key()
     if not api_key:
         print("Error: No FMP API key configured")
@@ -121,11 +133,14 @@ def fill_prices(tickers=None, all_sp500=False):
     print(f"Fetching from: {start_date}")
 
     if tickers is None:
-        if all_sp500:
+        if priority_only:
+            tickers = _get_priority_tickers()
+        elif all_sp500:
             tickers = get_sp500_tickers()
             print(f"Filling all S&P 500: {len(tickers)} tickers")
         else:
-            tickers = _get_priority_tickers()
+            tickers = _get_all_active_tickers()
+            print(f"Filling all {len(tickers)} active tickers")
 
     # Load existing supplement if any
     if SUPPLEMENT_FILE.exists():
@@ -191,8 +206,11 @@ def fill_prices(tickers=None, all_sp500=False):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fill SimFin price gap with FMP data")
     parser.add_argument("--all-sp500", action="store_true",
-                        help="Fill all S&P 500 tickers (may take multiple days)")
+                        help="Fill S&P 500 tickers only")
+    parser.add_argument("--priority-only", action="store_true",
+                        help="Fill only screened tickers + SPY")
     parser.add_argument("--tickers", nargs="+", help="Specific tickers to fill")
     args = parser.parse_args()
 
-    fill_prices(tickers=args.tickers, all_sp500=args.all_sp500)
+    fill_prices(tickers=args.tickers, all_sp500=args.all_sp500,
+                priority_only=args.priority_only)
