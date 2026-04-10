@@ -330,9 +330,15 @@ def build_training_dataset(
 
     # Add target labels
     if "forward_return_3m" in df.columns:
-        df["target_quintile"] = df.groupby("date")["forward_return_3m"].transform(
-            lambda x: pd.qcut(x, 5, labels=[1, 2, 3, 4, 5], duplicates="drop")
-        )
+        def _safe_qcut(x):
+            try:
+                return pd.qcut(x, 5, labels=[1, 2, 3, 4, 5], duplicates="drop")
+            except ValueError:
+                # Not enough unique values for 5 bins — use rank percentile
+                return pd.cut(x.rank(pct=True), bins=[0, 0.2, 0.4, 0.6, 0.8, 1.0],
+                              labels=[1, 2, 3, 4, 5], include_lowest=True)
+
+        df["target_quintile"] = df.groupby("date")["forward_return_3m"].transform(_safe_qcut)
         df["target_buy"] = (df["target_quintile"].astype(int) == 5).astype(int)
         df["target_avoid"] = (df["target_quintile"].astype(int) == 1).astype(int)
 
