@@ -49,9 +49,11 @@ def load_prices():
     if SUPPLEMENT_FILE.exists():
         sup = pd.read_csv(SUPPLEMENT_FILE, parse_dates=["Date"])
         sup["Ticker"] = sup["Ticker"].astype(str)
-        # Add SimFinId placeholder for supplement rows
+        # Add missing columns expected by SimFin format
         if "SimFinId" not in sup.columns:
             sup["SimFinId"] = 0
+        if "Adj. Close" not in sup.columns and "Close" in sup.columns:
+            sup["Adj. Close"] = sup["Close"]
         # Only keep supplement rows that are after SimFin's last date
         simfin_last = df["Date"].max()
         sup = sup[sup["Date"] > simfin_last]

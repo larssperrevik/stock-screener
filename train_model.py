@@ -11,8 +11,8 @@ import argparse
 import sys
 from pathlib import Path
 
-from ml.features import build_training_dataset, save_dataset, load_dataset
-from ml.model import WalkForwardModel, print_feature_importance
+from ml.features import build_training_dataset
+from ml.model import WalkForwardModel, print_feature_importance, save_dataset, load_dataset
 
 
 def cmd_build(args):
