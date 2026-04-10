@@ -17,7 +17,7 @@ class BacktestEngine:
     def __init__(
         self,
         criteria=None,
-        rebalance_freq="annual",   # annual, quarterly, monthly
+        rebalance_freq="annual",
         top_n=20,
         start_date="2005-01-01",
         end_date="2024-09-30",
@@ -39,15 +39,24 @@ class BacktestEngine:
         """Run the backtest. All data is local — no API calls."""
         rebalance_dates = self._rebalance_dates()
 
-        # Pre-load price data once
         all_prices = load_prices()
 
-        # Build a pivot table of adjusted close prices
+        # Build price matrix using Adj. Close
         print("Building price matrix...")
         price_matrix = all_prices.pivot_table(
             index="Date", columns="Ticker", values="Adj. Close", aggfunc="first"
         )
-        daily_returns = price_matrix.pct_change()
+
+        # Compute returns only where we have consecutive trading days
+        # (forward-fill up to 5 days for weekends/holidays, then compute returns)
+        price_filled = price_matrix.ffill(limit=5)
+        daily_returns = price_filled.pct_change()
+
+        # Clip extreme returns — anything beyond +/- 100% in a day is data noise
+        daily_returns = daily_returns.clip(-1.0, 1.0)
+
+        # Replace inf/nan with 0
+        daily_returns = daily_returns.replace([np.inf, -np.inf], 0.0).fillna(0.0)
 
         holdings_history = []
 
@@ -55,27 +64,20 @@ class BacktestEngine:
         for date in rebalance_dates:
             date_str = date.strftime("%Y-%m-%d")
 
-            # Get tradeable tickers at this date (survivorship-bias free)
             tradeable = get_tradeable_tickers_at_date(date)
-
-            # Get point-in-time fundamentals
             fundamentals = get_all_fundamentals_at_date(date)
-
-            # Filter to tradeable tickers only
             fundamentals = fundamentals[fundamentals["Ticker"].isin(tradeable)]
-
-            # Apply the screen
             screened = apply_screen(fundamentals, self.criteria)
 
             if screened.empty:
                 holdings_history.append({"date": date, "tickers": []})
-                print(f"  {date_str}: 0 stocks (from {len(tradeable)} tradeable)")
+                print(f"  {date_str}: 0 stocks")
                 continue
 
             top = screened.head(self.top_n)
             tickers = top["Ticker"].tolist()
             holdings_history.append({"date": date, "tickers": tickers})
-            print(f"  {date_str}: {len(tickers)} stocks selected (from {len(tradeable)} tradeable, {len(screened)} passed screen)")
+            print(f"  {date_str}: {len(tickers)} stocks (from {len(screened)} passed)")
 
         # Build portfolio returns
         print("\nComputing portfolio returns...")
@@ -89,7 +91,6 @@ class BacktestEngine:
             tickers = [t for t in entry["tickers"] if t in daily_returns.columns]
 
             if tickers:
-                # Equal weight
                 period_rets = daily_returns.loc[mask, tickers]
                 portfolio_returns.loc[mask] = period_rets.mean(axis=1)
 
@@ -97,15 +98,24 @@ class BacktestEngine:
         portfolio_returns = portfolio_returns.loc[
             (portfolio_returns.index >= self.start_date) &
             (portfolio_returns.index <= self.end_date)
-        ].dropna()
+        ]
+        portfolio_returns = portfolio_returns[portfolio_returns.index.isin(daily_returns.index)]
 
         # Benchmark
         bench_returns = None
         if self.benchmark in daily_returns.columns:
-            bench_returns = daily_returns[self.benchmark].loc[portfolio_returns.index]
+            bench_returns = daily_returns[self.benchmark].reindex(portfolio_returns.index).fillna(0.0)
 
         report = full_report(portfolio_returns, bench_returns)
         print_report(report)
+
+        # Print holdings for inspection
+        print("\nHoldings at each rebalance:")
+        for entry in holdings_history:
+            d = entry["date"].strftime("%Y-%m-%d")
+            t = ", ".join(entry["tickers"][:10])
+            more = f" +{len(entry['tickers'])-10} more" if len(entry["tickers"]) > 10 else ""
+            print(f"  {d}: {t}{more}")
 
         return {
             "portfolio_returns": portfolio_returns,
