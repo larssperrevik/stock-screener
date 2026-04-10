@@ -50,10 +50,25 @@ def _save_progress(progress):
         json.dump(progress, f, indent=2)
 
 
+SIMFIN_LAST_DATE_FILE = Path("data/simfin/simfin_last_date.txt")
+
 def _get_simfin_last_date():
-    """Find the last date in SimFin price data."""
-    prices = load_prices()
-    return prices["Date"].max()
+    """Find the last date in the original SimFin price data (not supplement)."""
+    # Cache the result to avoid re-scanning the 3.4GB file
+    if SIMFIN_LAST_DATE_FILE.exists():
+        return pd.Timestamp(SIMFIN_LAST_DATE_FILE.read_text().strip())
+
+    # Scan once and cache
+    import subprocess
+    result = subprocess.run(
+        ["tail", "-1", "data/simfin/us-derived-shareprices-daily.csv"],
+        capture_output=True, text=True,
+    )
+    # Format: Ticker;SimFinId;Date;...
+    last_line = result.stdout.strip()
+    date_str = last_line.split(";")[2]
+    SIMFIN_LAST_DATE_FILE.write_text(date_str)
+    return pd.Timestamp(date_str)
 
 
 def _fetch_fmp_prices(ticker, start_date, api_key):
@@ -109,16 +124,36 @@ def _get_priority_tickers():
     return sorted(tickers)
 
 
+ACTIVE_TICKERS_FILE = Path("data/simfin/active_tickers.json")
+
 def _get_all_active_tickers():
     """Get all tickers that were actively trading near SimFin's last date."""
-    prices = load_prices()
-    last_date = prices["Date"].max()
-    cutoff = last_date - pd.Timedelta(days=30)
-    recent = prices[prices["Date"] >= cutoff]
-    tickers = sorted(recent["Ticker"].unique().tolist())
-    # Filter out delisted tickers (they have _delisted suffix in SimFin)
-    tickers = [t for t in tickers if "_delisted" not in t]
-    return tickers
+    if ACTIVE_TICKERS_FILE.exists():
+        with open(ACTIVE_TICKERS_FILE) as f:
+            return json.load(f)
+
+    # Scan SimFin source (not supplement) for tickers with recent data
+    print("  Scanning SimFin for active tickers (one-time)...")
+    simfin_last = _get_simfin_last_date()
+    cutoff = (simfin_last - pd.Timedelta(days=30)).strftime("%Y-%m-%d")
+
+    tickers = set()
+    with open("data/simfin/us-derived-shareprices-daily.csv", "r") as f:
+        header = f.readline()  # skip header
+        for line in f:
+            parts = line.split(";")
+            if len(parts) >= 3:
+                date_str = parts[2]
+                if date_str >= cutoff:
+                    ticker = parts[0]
+                    if "_delisted" not in ticker and ticker:
+                        tickers.add(ticker)
+
+    result = sorted(tickers)
+    with open(ACTIVE_TICKERS_FILE, "w") as f:
+        json.dump(result, f)
+    print(f"  Found {len(result)} active tickers, cached to {ACTIVE_TICKERS_FILE}")
+    return result
 
 
 def fill_prices(tickers=None, all_sp500=False, priority_only=False):
