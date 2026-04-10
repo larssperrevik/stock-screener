@@ -193,6 +193,13 @@ def generate_dashboard(
     port_ret_trimmed = port_ret[port_ret.index >= chart_start]
     bench_ret_trimmed = bench_ret[bench_ret.index >= chart_start] if bench_ret is not None else None
 
+    # Recompute metrics from the same period for fair comparison
+    report = full_report(port_ret_trimmed, bench_ret_trimmed)
+    if bench_ret_trimmed is not None:
+        spy_report = full_report(bench_ret_trimmed)
+    else:
+        spy_report = {}
+
     cum_port = _cumulative_returns_json(port_ret_trimmed, "Screener")
     cum_bench = _cumulative_returns_json(bench_ret_trimmed, "SPY") if bench_ret_trimmed is not None else None
     dd_port = _drawdown_json(port_ret_trimmed, "Screener")
@@ -232,6 +239,7 @@ def generate_dashboard(
         "rolling": [roll_port] + ([roll_combined] if roll_combined else []) + ([roll_bench] if roll_bench else []),
         "report": {k: round(v, 4) if isinstance(v, float) else v for k, v in report.items()},
         "combined_report": {k: round(v, 4) if isinstance(v, float) else v for k, v in comb_report.items()} if has_combined else {},
+        "spy_report": {k: round(v, 4) if isinstance(v, float) else v for k, v in spy_report.items()},
         "has_combined": has_combined,
         "holdings": holdings_data,
         "combined_holdings": comb_holdings_data,
@@ -260,6 +268,7 @@ def _pct(val, digits=1):
 def _build_html(data):
     report = data["report"]
     comb_report = data.get("combined_report", {})
+    spy_report = data.get("spy_report", {})
     has_combined = data.get("has_combined", False)
     config = data["config"]
 
@@ -385,8 +394,12 @@ def _build_html(data):
   </div>""" if has_combined else ''}
   <div class="strategy-card">
     <h3>SPY Benchmark</h3>
-    <div class="stat"><span>CAGR</span><span class="val">{_pct(report.get('benchmark_cagr'))}</span></div>
-    <div class="stat"><span>Max Drawdown</span><span class="val negative">{_pct(report.get('benchmark_max_dd'))}</span></div>
+    <div class="stat"><span>CAGR</span><span class="val">{_pct(spy_report.get('cagr'))}</span></div>
+    <div class="stat"><span>Total Return</span><span class="val">{_pct(spy_report.get('total_return'), 0)}</span></div>
+    <div class="stat"><span>Sharpe</span><span class="val">{spy_report.get('sharpe', 0):.2f}</span></div>
+    <div class="stat"><span>Sortino</span><span class="val">{spy_report.get('sortino', 0):.2f}</span></div>
+    <div class="stat"><span>Max Drawdown</span><span class="val negative">{_pct(spy_report.get('max_drawdown'))}</span></div>
+    <div class="stat"><span>Volatility</span><span class="val">{_pct(spy_report.get('volatility'))}</span></div>
   </div>
 </div>
 
