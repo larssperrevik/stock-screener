@@ -188,12 +188,17 @@ def generate_dashboard(
     latest = latest_screen_with_returns(criteria, screen_date=last_rebal)
 
     # === Build chart data ===
-    cum_port = _cumulative_returns_json(port_ret, "Screener")
-    cum_bench = _cumulative_returns_json(bench_ret, "SPY") if bench_ret is not None else None
-    dd_port = _drawdown_json(port_ret, "Screener")
-    dd_bench = _drawdown_json(bench_ret, "SPY") if bench_ret is not None else None
-    roll_port = _rolling_returns_json(port_ret, 252, "Screener (1Y)")
-    roll_bench = _rolling_returns_json(bench_ret, 252, "SPY (1Y)") if bench_ret is not None else None
+    # Trim all series to start from combined_start so they're comparable
+    chart_start = pd.Timestamp(combined_start) if has_combined else port_ret.index[0]
+    port_ret_trimmed = port_ret[port_ret.index >= chart_start]
+    bench_ret_trimmed = bench_ret[bench_ret.index >= chart_start] if bench_ret is not None else None
+
+    cum_port = _cumulative_returns_json(port_ret_trimmed, "Screener")
+    cum_bench = _cumulative_returns_json(bench_ret_trimmed, "SPY") if bench_ret_trimmed is not None else None
+    dd_port = _drawdown_json(port_ret_trimmed, "Screener")
+    dd_bench = _drawdown_json(bench_ret_trimmed, "SPY") if bench_ret_trimmed is not None else None
+    roll_port = _rolling_returns_json(port_ret_trimmed, 252, "Screener (1Y)")
+    roll_bench = _rolling_returns_json(bench_ret_trimmed, 252, "SPY (1Y)") if bench_ret_trimmed is not None else None
 
     cum_combined = _cumulative_returns_json(comb_ret, "Screener + ML") if has_combined else None
     dd_combined = _drawdown_json(comb_ret, "Screener + ML") if has_combined else None
