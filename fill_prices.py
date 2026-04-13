@@ -79,8 +79,15 @@ def _fetch_fmp_prices(ticker, start_date, api_key):
         params={"symbol": ticker, "from": start_date, "to": end, "apikey": api_key},
         timeout=15,
     )
+    if r.status_code == 429:
+        return None  # rate limit — stop entirely
     if r.status_code == 402:
-        return None  # rate limit
+        body = r.text.lower()
+        if "premium" in body or "subscription" in body or "not available" in body:
+            # Ticker not on free tier — skip it
+            return pd.DataFrame()
+        # Could also be rate limit disguised as 402
+        return None
     r.raise_for_status()
     data = r.json()
     if not data:
@@ -174,8 +181,12 @@ def fill_prices(tickers=None, all_sp500=False, priority_only=False):
             tickers = get_sp500_tickers()
             print(f"Filling all S&P 500: {len(tickers)} tickers")
         else:
-            tickers = _get_all_active_tickers()
-            print(f"Filling all {len(tickers)} active tickers")
+            # Priority tickers first, then the rest
+            priority = _get_priority_tickers()
+            all_active = _get_all_active_tickers()
+            rest = [t for t in all_active if t not in set(priority)]
+            tickers = priority + rest
+            print(f"Filling {len(priority)} priority + {len(rest)} remaining = {len(tickers)} total")
 
     # Load existing supplement if any
     if SUPPLEMENT_FILE.exists():
