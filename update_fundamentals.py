@@ -38,14 +38,19 @@ def _save_progress(progress):
 
 def fetch_derived(ticker, api_key):
     """Fetch derived annual data for one ticker from SimFin API."""
-    r = requests.get(
-        f"{API_BASE}/companies/statements/compact",
-        headers={"Authorization": f"api-key {api_key}"},
-        params={"ticker": ticker, "statements": "derived", "period": "fy"},
-        timeout=15,
-    )
-    if r.status_code == 429:
-        return "rate_limit"
+    for attempt in range(3):
+        r = requests.get(
+            f"{API_BASE}/companies/statements/compact",
+            headers={"Authorization": f"api-key {api_key}"},
+            params={"ticker": ticker, "statements": "derived", "period": "fy"},
+            timeout=15,
+        )
+        if r.status_code == 429:
+            if attempt < 2:
+                time.sleep(3)  # short retry
+                continue
+            return "rate_limit"
+        break
     if r.status_code != 200:
         return None
 
@@ -71,14 +76,19 @@ def fetch_derived(ticker, api_key):
 
 def fetch_pl_publish_dates(ticker, api_key):
     """Fetch income statement to get Publish Date (not in derived endpoint)."""
-    r = requests.get(
-        f"{API_BASE}/companies/statements/compact",
-        headers={"Authorization": f"api-key {api_key}"},
-        params={"ticker": ticker, "statements": "pl", "period": "fy"},
-        timeout=15,
-    )
-    if r.status_code == 429:
-        return "rate_limit"
+    for attempt in range(3):
+        r = requests.get(
+            f"{API_BASE}/companies/statements/compact",
+            headers={"Authorization": f"api-key {api_key}"},
+            params={"ticker": ticker, "statements": "pl", "period": "fy"},
+            timeout=15,
+        )
+        if r.status_code == 429:
+            if attempt < 2:
+                time.sleep(3)
+                continue
+            return "rate_limit"
+        break
     if r.status_code != 200:
         return None
 
@@ -143,7 +153,7 @@ def main():
         if isinstance(result, str) and result == "rate_limit":
             print("rate limit! Stopping.")
             break
-        time.sleep(1.1)  # respect 1 req/sec
+        time.sleep(1.5)  # respect rate limit with margin
 
         if result is None or (isinstance(result, pd.DataFrame) and result.empty):
             print("no data")
