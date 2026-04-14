@@ -22,6 +22,7 @@ from data.live_prices import get_live_prices
 from screener.criteria import ScreenCriteria, apply_screen
 from backtest.engine import BacktestEngine
 from backtest.event_engine import EventDrivenEngine
+from sector_analysis import run_with_holdings_tracking, build_sector_report
 from metrics.performance import (
     cagr, sharpe_ratio, sortino_ratio, max_drawdown, ulcer_index, full_report
 )
@@ -185,6 +186,16 @@ def generate_dashboard(
         event_trades = []
         comb_holdings = []
 
+    # === Sector analysis (reuses event-driven simulation) ===
+    sector_data = {}
+    if has_combined:
+        print("\nRunning sector analysis...")
+        try:
+            daily_holdings, _ = run_with_holdings_tracking(combined_start, end)
+            sector_data = build_sector_report(daily_holdings)
+        except Exception as e:
+            print(f"Sector analysis failed: {e}")
+
     # === Latest screen with live returns ===
     last_rebal = holdings[-1]["date"].strftime("%Y-%m-%d")
     print(f"\nRunning latest screen at {last_rebal} with forward returns...")
@@ -244,6 +255,7 @@ def generate_dashboard(
         "combined_report": {k: round(v, 4) if isinstance(v, float) else v for k, v in comb_report.items()} if has_combined else {},
         "spy_report": {k: round(v, 4) if isinstance(v, float) else v for k, v in spy_report.items()},
         "has_combined": has_combined,
+        "sector_data": sector_data,
         "holdings": holdings_data,
         "event_trades": event_trades_data,
         "latest_screen": latest_data,
@@ -272,6 +284,7 @@ def _build_html(data):
     comb_report = data.get("combined_report", {})
     spy_report = data.get("spy_report", {})
     has_combined = data.get("has_combined", False)
+    sector_data = data.get("sector_data", {})
     config = data["config"]
 
     screen_rows = ""
@@ -323,6 +336,41 @@ def _build_html(data):
     dd_json = json.dumps(data["drawdown"])
     roll_json = json.dumps(data["rolling"])
 
+    # Sector chart data
+    sector_colors = [
+        "#58a6ff", "#3fb950", "#d2a8ff", "#f0883e", "#f85149",
+        "#db61a2", "#79c0ff", "#56d364", "#e3b341", "#8b949e",
+        "#b392f0", "#ff7b72", "#7ee787", "#ffa657", "#d29922",
+    ]
+    sector_dates_json = json.dumps(sector_data.get("dates", []))
+    sector_datasets = []
+    for i, sector in enumerate(sector_data.get("sectors", [])):
+        weights = sector_data.get("weights", {}).get(sector, [])
+        if max(weights) < 0.01 if weights else True:
+            continue
+        color = sector_colors[i % len(sector_colors)]
+        sector_datasets.append({
+            "label": sector,
+            "data": [round(w * 100, 1) for w in weights],
+            "backgroundColor": color + "99",
+            "borderColor": color,
+            "borderWidth": 1,
+            "fill": True,
+        })
+    sector_datasets_json = json.dumps(sector_datasets)
+
+    sector_stats_rows = ""
+    for s in sector_data.get("stats", []):
+        contrib_class = "positive" if s["total_contribution"] > 0 else "negative"
+        eff = s["contribution_per_pct"]
+        eff_class = "positive" if eff > 2.0 else ("negative" if eff < 0 else "")
+        sector_stats_rows += (
+            f"<tr><td>{s['sector']}</td>"
+            f"<td>{s['avg_weight']:.1%}</td>"
+            f'<td class="{contrib_class}">{s["total_contribution"]:.1%}</td>'
+            f'<td class="{eff_class}">{eff:.2f}x</td></tr>\n'
+        )
+
     return f"""<!DOCTYPE html>
 <html>
 <head>
@@ -365,6 +413,13 @@ def _build_html(data):
   .strategy-card.combined h3 {{ color: #d2a8ff; }}
   .strategy-card .stat {{ display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid #21262d; }}
   .strategy-card .stat .val {{ font-weight: bold; }}
+  .tabs {{ display: flex; gap: 0; margin: 20px 0 0; border-bottom: 2px solid #30363d; }}
+  .tab {{ padding: 10px 24px; cursor: pointer; color: #8b949e; border-bottom: 2px solid transparent;
+          margin-bottom: -2px; font-size: 0.95em; transition: all 0.2s; }}
+  .tab:hover {{ color: #e0e0e0; }}
+  .tab.active {{ color: #58a6ff; border-bottom-color: #58a6ff; font-weight: bold; }}
+  .tab-content {{ display: none; padding-top: 10px; }}
+  .tab-content.active {{ display: block; }}
   @media (max-width: 900px) {{ .two-col, .three-col {{ grid-template-columns: 1fr; }} }}
 </style>
 </head>
@@ -374,6 +429,14 @@ def _build_html(data):
 <p class="subtitle">Buffett/Munger quality screen + event-driven engine &middot; {config['start']} to {config['end']} &middot;
    Screener: {config['freq']}, top {config['top_n']} &middot;
    Event: report-triggered, 15 positions, 540d max hold</p>
+
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('performance')">Performance</div>
+  <div class="tab" onclick="switchTab('sectors')">Sectors</div>
+  <div class="tab" onclick="switchTab('holdings')">Holdings</div>
+</div>
+
+<div id="tab-performance" class="tab-content active">
 
 <h2>Strategy Comparison</h2>
 <div class="three-col">
@@ -413,6 +476,32 @@ def _build_html(data):
 </div>
 <div class="chart-container"><canvas id="rollChart"></canvas></div>
 
+
+</div><!-- end tab-performance -->
+
+<div id="tab-sectors" class="tab-content">
+
+<h2>Sector Allocation Over Time</h2>
+<div class="chart-container">
+  <canvas id="sectorChart" height="120"></canvas>
+</div>
+
+<h2>Sector Performance</h2>
+<div class="table-container">
+<table>
+<thead><tr>
+  <th>Sector</th><th>Avg Weight</th><th>Total Contribution</th><th>Efficiency</th>
+</tr></thead>
+<tbody>{sector_stats_rows}</tbody>
+</table>
+<p style="color: #8b949e; font-size: 0.8em; margin-top: 10px;">
+  Efficiency = total return contribution / average weight. Higher = more return per unit of allocation.</p>
+</div>
+
+</div><!-- end tab-sectors -->
+
+<div id="tab-holdings" class="tab-content">
+
 <h2>Latest Screen: {data['last_rebalance']} (with returns since)</h2>
 <div class="table-container">
 <table>
@@ -445,6 +534,8 @@ def _build_html(data):
 </div>
 </div>
 </div>
+
+</div><!-- end tab-holdings -->
 
 <script>
 const colors = [
@@ -521,6 +612,44 @@ new Chart(document.getElementById('rollChart'), {{
       ticks: {{ ...defaultOpts.scales.y.ticks, callback: v => (v*100).toFixed(0)+'%' }} }} }}
   }}
 }});
+
+// Sector chart
+const sectorLabels = {sector_dates_json};
+const sectorDatasets = {sector_datasets_json};
+let sectorChart = null;
+
+function initSectorChart() {{
+  if (sectorChart) return;
+  const ctx = document.getElementById('sectorChart');
+  if (!ctx) return;
+  sectorChart = new Chart(ctx, {{
+    type: 'line',
+    data: {{ labels: sectorLabels, datasets: sectorDatasets }},
+    options: {{
+      responsive: true,
+      scales: {{
+        x: {{ type: 'time', time: {{ unit: 'year' }}, ticks: {{ color: '#8b949e' }}, grid: {{ color: '#21262d' }} }},
+        y: {{ stacked: true, min: 0, max: 100,
+              ticks: {{ color: '#8b949e', callback: v => v + '%' }}, grid: {{ color: '#21262d' }} }}
+      }},
+      plugins: {{
+        legend: {{ labels: {{ color: '#8b949e' }}, position: 'right' }},
+        title: {{ display: true, text: 'Portfolio Sector Allocation (%)', color: '#e0e0e0' }}
+      }},
+      elements: {{ line: {{ tension: 0.3 }}, point: {{ radius: 0 }} }}
+    }}
+  }});
+}}
+
+// Tab switching
+function switchTab(name) {{
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  event.target.classList.add('active');
+  document.getElementById('tab-' + name).classList.add('active');
+  // Lazy init sector chart when tab is first shown
+  if (name === 'sectors') setTimeout(initSectorChart, 50);
+}}
 </script>
 </body>
 </html>"""
