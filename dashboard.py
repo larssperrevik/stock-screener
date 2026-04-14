@@ -627,9 +627,9 @@ function initSectorChart() {{
   const ctx = document.getElementById('sectorChart');
   if (!ctx) return;
 
-  // Add relative performance line on secondary axis
+  // Add relative performance line on secondary axis (same labels as sectors)
   const allDatasets = [...sectorDatasets];
-  if (relPerf.dates && relPerf.dates.length > 0) {{
+  if (relPerf.values && relPerf.values.length > 0) {{
     allDatasets.push({{
       label: 'vs S&P 500',
       data: relPerf.values,
@@ -644,8 +644,7 @@ function initSectorChart() {{
     }});
   }}
 
-  // Use the longer of sector dates or relPerf dates
-  const chartLabels = sectorLabels.length >= (relPerf.dates || []).length ? sectorLabels : relPerf.dates;
+  const chartLabels = sectorLabels;
 
   sectorChart = new Chart(ctx, {{
     type: 'line',

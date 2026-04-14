@@ -148,21 +148,19 @@ def run_with_holdings_tracking(start="2011-01-01", end="2024-09-30"):
         n = len(held)
 
         # Compute daily return
-        if held:
-            prev_idx = price_matrix.index.get_loc(day)
-            if prev_idx > 0:
-                prev = price_matrix.index[prev_idx - 1]
-                rets = []
-                for t in held:
-                    if t in price_matrix.columns:
-                        p0, p1 = price_matrix.loc[prev, t], price_matrix.loc[day, t]
-                        if pd.notna(p0) and pd.notna(p1) and p0 > 0:
-                            r = (p1 / p0) - 1
-                            if abs(r) < 1:
-                                rets.append(r)
-                port_ret = np.mean(rets) if rets else 0.0
-            else:
-                port_ret = 0.0
+        prev_idx = price_matrix.index.get_loc(day)
+        prev = price_matrix.index[prev_idx - 1] if prev_idx > 0 else None
+
+        if held and prev is not None:
+            rets = []
+            for t in held:
+                if t in price_matrix.columns:
+                    p0, p1 = price_matrix.loc[prev, t], price_matrix.loc[day, t]
+                    if pd.notna(p0) and pd.notna(p1) and p0 > 0:
+                        r = (p1 / p0) - 1
+                        if abs(r) < 1:
+                            rets.append(r)
+            port_ret = np.mean(rets) if rets else 0.0
         else:
             port_ret = (1 + 0.04) ** (1/252) - 1
 
@@ -174,7 +172,7 @@ def run_with_holdings_tracking(start="2011-01-01", end="2024-09-30"):
 
         # Per-sector return contribution
         sector_returns = defaultdict(float)
-        if held and prev_idx > 0:
+        if held and prev is not None:
             for t in held:
                 if t in price_matrix.columns:
                     p0, p1 = price_matrix.loc[prev, t], price_matrix.loc[day, t]
@@ -186,7 +184,7 @@ def run_with_holdings_tracking(start="2011-01-01", end="2024-09-30"):
 
         # SPY return for relative performance
         spy_ret = 0.0
-        if "SPY" in price_matrix.columns and prev_idx > 0:
+        if "SPY" in price_matrix.columns and prev is not None:
             sp0 = price_matrix.loc[prev, "SPY"]
             sp1 = price_matrix.loc[day, "SPY"]
             if pd.notna(sp0) and pd.notna(sp1) and sp0 > 0:
@@ -313,14 +311,23 @@ def build_sector_report(daily_holdings):
         [p / s - 1 if s > 0 else 0 for p, s in zip(port_cum, spy_cum)],
         index=daily_dates
     )
-    # Resample to monthly
+    # Resample to match monthly_dates exactly
     relative_monthly = relative_daily.resample("MS").last()
-    # Smooth with 3-month rolling average
     relative_smoothed = relative_monthly.rolling(3, min_periods=1).mean()
 
+    # Align to sector monthly_dates
+    target_dates = pd.to_datetime(monthly_dates)
+    rel_values = []
+    for d in target_dates:
+        # Find closest date in smoothed series
+        mask = relative_smoothed.index <= d
+        if mask.any():
+            rel_values.append(round(float(relative_smoothed[mask].iloc[-1]) * 100, 2))
+        else:
+            rel_values.append(0.0)
+
     relative_performance = {
-        "dates": [d.strftime("%Y-%m-%d") for d in relative_smoothed.index],
-        "values": [round(float(v) * 100, 2) for v in relative_smoothed.values],
+        "values": rel_values,
     }
 
     return {
