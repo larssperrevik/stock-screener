@@ -186,6 +186,8 @@ class EventDrivenEngine:
         buy_threshold=50.0,      # Minimum score to buy
         sell_threshold=30.0,     # Sell if score drops below this
         freshness_days=120,      # Only score stocks with data < 120 days old
+        max_correlation=0.75,    # Max pairwise correlation with existing holdings
+        corr_lookback=252,       # Days of price history for correlation calc
         start_date="2011-01-01",
         end_date="2024-09-30",
         benchmark="SPY",
@@ -197,6 +199,8 @@ class EventDrivenEngine:
         self.buy_threshold = buy_threshold
         self.sell_threshold = sell_threshold
         self.freshness_days = freshness_days
+        self.max_correlation = max_correlation
+        self.corr_lookback = corr_lookback
         self.start_date = pd.Timestamp(start_date)
         self.end_date = pd.Timestamp(end_date)
         self.benchmark = benchmark
@@ -367,6 +371,10 @@ class EventDrivenEngine:
                       and len(positions) < self.max_positions
                       and ticker in price_matrix.columns):
 
+                    # Check correlation with existing holdings
+                    if not self._check_correlation(ticker, positions, price_matrix, day):
+                        continue
+
                     current_price = price_matrix.loc[day, ticker]
                     if pd.notna(current_price) and current_price > 0:
                         positions[ticker] = Position(
@@ -460,6 +468,42 @@ class EventDrivenEngine:
             "report": report,
             "positions_ts": ret_df["n_positions"],
         }
+
+    def _check_correlation(self, ticker, positions, price_matrix, day):
+        """Check if ticker is too correlated with any current holding.
+
+        Returns True if OK to buy, False if too correlated.
+        """
+        if not positions or self.max_correlation >= 1.0:
+            return True
+
+        # Get lookback window of daily returns
+        end_idx = price_matrix.index.get_loc(day)
+        start_idx = max(0, end_idx - self.corr_lookback)
+        window = price_matrix.iloc[start_idx:end_idx + 1]
+
+        if ticker not in window.columns:
+            return True
+
+        candidate_returns = window[ticker].pct_change().dropna()
+        if len(candidate_returns) < 60:
+            return True  # not enough history, allow it
+
+        for held_ticker in positions:
+            if held_ticker not in window.columns:
+                continue
+            held_returns = window[held_ticker].pct_change().dropna()
+
+            # Align
+            common = candidate_returns.index.intersection(held_returns.index)
+            if len(common) < 60:
+                continue
+
+            corr = candidate_returns[common].corr(held_returns[common])
+            if pd.notna(corr) and corr > self.max_correlation:
+                return False
+
+        return True
 
     def _passes_screen(self, row):
         """Quick check if a single row passes screener criteria."""
@@ -587,6 +631,8 @@ if __name__ == "__main__":
     parser.add_argument("--min-hold-days", type=int, default=60)
     parser.add_argument("--buy-threshold", type=float, default=50)
     parser.add_argument("--sell-threshold", type=float, default=30)
+    parser.add_argument("--max-correlation", type=float, default=0.75,
+                        help="Max pairwise correlation with existing holdings (0-1)")
     parser.add_argument("--min-roe", type=float, default=0.15)
     parser.add_argument("--min-roic", type=float, default=0.10)
     parser.add_argument("--min-piotroski", type=int, default=5)
@@ -605,6 +651,7 @@ if __name__ == "__main__":
             min_hold_days=args.min_hold_days,
             buy_threshold=args.buy_threshold,
             sell_threshold=args.sell_threshold,
+            max_correlation=args.max_correlation,
             start_date=args.start,
             end_date=args.end,
         )

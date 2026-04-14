@@ -168,6 +168,7 @@ def generate_dashboard(
         event_engine = EventDrivenEngine(
             criteria=criteria, max_positions=15, max_hold_days=540,
             min_hold_days=60, buy_threshold=40, sell_threshold=20,
+            max_correlation=0.65,
             start_date=combined_start, end_date=end,
         )
         event_result = event_engine.run()

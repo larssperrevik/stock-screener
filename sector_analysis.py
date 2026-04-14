@@ -26,6 +26,7 @@ def run_with_holdings_tracking(start="2011-01-01", end="2024-09-30"):
         criteria=ScreenCriteria(),
         max_positions=15, max_hold_days=540,
         min_hold_days=60, buy_threshold=40, sell_threshold=20,
+        max_correlation=0.65,
         start_date=start, end_date=end,
     )
 
