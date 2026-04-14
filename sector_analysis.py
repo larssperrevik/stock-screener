@@ -184,11 +184,20 @@ def run_with_holdings_tracking(start="2011-01-01", end="2024-09-30"):
                             sector = sector_map.get(t, "Unknown")
                             sector_returns[sector] += r / max(n, 1)
 
+        # SPY return for relative performance
+        spy_ret = 0.0
+        if "SPY" in price_matrix.columns and prev_idx > 0:
+            sp0 = price_matrix.loc[prev, "SPY"]
+            sp1 = price_matrix.loc[day, "SPY"]
+            if pd.notna(sp0) and pd.notna(sp1) and sp0 > 0:
+                spy_ret = (sp1 / sp0) - 1
+
         daily_holdings.append({
             "date": day,
             "holdings": held,
             "n_positions": n,
             "port_return": port_ret,
+            "spy_return": spy_ret,
             "sector_weights": dict(sector_weights),
             "sector_returns": dict(sector_returns),
         })
@@ -240,6 +249,9 @@ def build_sector_report(daily_holdings):
         for s in all_sectors:
             monthly_weights[s].append(np.mean(month_weights_accum[s]) if month_weights_accum[s] else 0)
             monthly_returns[s].append(sum(month_returns_accum[s]))
+        for s in all_sectors:
+            monthly_weights[s].append(np.mean(month_weights_accum[s]) if month_weights_accum[s] else 0)
+            monthly_returns[s].append(sum(month_returns_accum[s]))
 
     # Sector performance summary
     print("\n" + "=" * 70)
@@ -282,12 +294,42 @@ def build_sector_report(daily_holdings):
         vol = np.std(rets) * np.sqrt(252)
         print(f"  {sector:<25} {n_days:>5} days  Ann.Return: {ann_ret:>7.1%}  Vol: {vol:>6.1%}")
 
+    # Smoothed relative performance (portfolio vs SPY)
+    # Cumulative daily, then resample to monthly, smooth with 3-month MA
+    port_cum = []
+    spy_cum = []
+    cum_p = 1.0
+    cum_s = 1.0
+    daily_dates = []
+    for d in daily_holdings:
+        cum_p *= (1 + d["port_return"])
+        cum_s *= (1 + d["spy_return"])
+        daily_dates.append(d["date"])
+        port_cum.append(cum_p)
+        spy_cum.append(cum_s)
+
+    # Relative: portfolio / SPY - 1 (0 = equal, positive = outperforming)
+    relative_daily = pd.Series(
+        [p / s - 1 if s > 0 else 0 for p, s in zip(port_cum, spy_cum)],
+        index=daily_dates
+    )
+    # Resample to monthly
+    relative_monthly = relative_daily.resample("MS").last()
+    # Smooth with 3-month rolling average
+    relative_smoothed = relative_monthly.rolling(3, min_periods=1).mean()
+
+    relative_performance = {
+        "dates": [d.strftime("%Y-%m-%d") for d in relative_smoothed.index],
+        "values": [round(float(v) * 100, 2) for v in relative_smoothed.values],
+    }
+
     return {
         "dates": monthly_dates,
         "weights": monthly_weights,
         "returns": monthly_returns,
         "sectors": all_sectors,
         "stats": sector_stats,
+        "relative_performance": relative_performance,
     }
 
 

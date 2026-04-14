@@ -359,6 +359,9 @@ def _build_html(data):
         })
     sector_datasets_json = json.dumps(sector_datasets)
 
+    rel_perf = sector_data.get("relative_performance", {})
+    rel_perf_json = json.dumps(rel_perf)
+
     sector_stats_rows = ""
     for s in sector_data.get("stats", []):
         contrib_class = "positive" if s["total_contribution"] > 0 else "negative"
@@ -613,28 +616,65 @@ new Chart(document.getElementById('rollChart'), {{
   }}
 }});
 
-// Sector chart
+// Sector chart with relative performance overlay
 const sectorLabels = {sector_dates_json};
 const sectorDatasets = {sector_datasets_json};
+const relPerf = {rel_perf_json};
 let sectorChart = null;
 
 function initSectorChart() {{
   if (sectorChart) return;
   const ctx = document.getElementById('sectorChart');
   if (!ctx) return;
+
+  // Add relative performance line on secondary axis
+  const allDatasets = [...sectorDatasets];
+  if (relPerf.dates && relPerf.dates.length > 0) {{
+    allDatasets.push({{
+      label: 'vs S&P 500',
+      data: relPerf.values,
+      borderColor: '#ffffff',
+      backgroundColor: 'transparent',
+      borderWidth: 2.5,
+      borderDash: [6, 3],
+      fill: false,
+      yAxisID: 'y2',
+      pointRadius: 0,
+      order: -1,
+    }});
+  }}
+
+  // Use the longer of sector dates or relPerf dates
+  const chartLabels = sectorLabels.length >= (relPerf.dates || []).length ? sectorLabels : relPerf.dates;
+
   sectorChart = new Chart(ctx, {{
     type: 'line',
-    data: {{ labels: sectorLabels, datasets: sectorDatasets }},
+    data: {{ labels: chartLabels, datasets: allDatasets }},
     options: {{
       responsive: true,
+      interaction: {{ mode: 'index', intersect: false }},
       scales: {{
         x: {{ type: 'time', time: {{ unit: 'year' }}, ticks: {{ color: '#8b949e' }}, grid: {{ color: '#21262d' }} }},
-        y: {{ stacked: true, min: 0, max: 100,
-              ticks: {{ color: '#8b949e', callback: v => v + '%' }}, grid: {{ color: '#21262d' }} }}
+        y: {{ stacked: true, min: 0, max: 100, position: 'left',
+              ticks: {{ color: '#8b949e', callback: v => v + '%' }}, grid: {{ color: '#21262d' }},
+              title: {{ display: true, text: 'Sector Weight', color: '#8b949e' }} }},
+        y2: {{ position: 'right', grid: {{ drawOnChartArea: false }},
+              ticks: {{ color: '#ffffff', callback: v => (v > 0 ? '+' : '') + v + '%' }},
+              title: {{ display: true, text: 'vs S&P 500 (cumulative)', color: '#ffffff' }} }}
       }},
       plugins: {{
         legend: {{ labels: {{ color: '#8b949e' }}, position: 'right' }},
-        title: {{ display: true, text: 'Portfolio Sector Allocation (%)', color: '#e0e0e0' }}
+        title: {{ display: true, text: 'Sector Allocation & Relative Performance vs S&P 500', color: '#e0e0e0' }},
+        tooltip: {{
+          callbacks: {{
+            label: function(ctx) {{
+              if (ctx.dataset.yAxisID === 'y2') {{
+                return ctx.dataset.label + ': ' + (ctx.raw > 0 ? '+' : '') + ctx.raw.toFixed(1) + '%';
+              }}
+              return ctx.dataset.label + ': ' + ctx.raw + '%';
+            }}
+          }}
+        }}
       }},
       elements: {{ line: {{ tension: 0.3 }}, point: {{ radius: 0 }} }}
     }}
