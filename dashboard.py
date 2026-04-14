@@ -362,14 +362,42 @@ def _build_html(data):
     rel_perf = sector_data.get("relative_performance", {})
     rel_perf_json = json.dumps(rel_perf)
 
+    # Over/underweight chart data
+    overweight = sector_data.get("overweight", {})
+    sp500_weights_data = sector_data.get("sp500_weights", {})
+    overweight_datasets = []
+    for i, sector in enumerate(sector_data.get("sectors", [])):
+        ow = overweight.get(sector, [])
+        if not ow or max(abs(v) for v in ow) < 0.005:
+            continue
+        color = sector_colors[i % len(sector_colors)]
+        overweight_datasets.append({
+            "label": sector,
+            "data": [round(v * 100, 1) for v in ow],
+            "borderColor": color,
+            "backgroundColor": "transparent",
+            "borderWidth": 1.5,
+            "fill": False,
+            "pointRadius": 0,
+            "tension": 0.3,
+        })
+    overweight_json = json.dumps(overweight_datasets)
+
     sector_stats_rows = ""
     for s in sector_data.get("stats", []):
         contrib_class = "positive" if s["total_contribution"] > 0 else "negative"
         eff = s["contribution_per_pct"]
         eff_class = "positive" if eff > 2.0 else ("negative" if eff < 0 else "")
+        # Compute avg S&P weight for this sector
+        sp_vals = sp500_weights_data.get(s["sector"], [])
+        avg_sp = np.mean(sp_vals) if sp_vals else 0
+        diff = s["avg_weight"] - avg_sp
+        diff_class = "positive" if diff > 0.02 else ("negative" if diff < -0.02 else "")
         sector_stats_rows += (
             f"<tr><td>{s['sector']}</td>"
             f"<td>{s['avg_weight']:.1%}</td>"
+            f"<td>{avg_sp:.1%}</td>"
+            f'<td class="{diff_class}">{diff:+.1%}</td>'
             f'<td class="{contrib_class}">{s["total_contribution"]:.1%}</td>'
             f'<td class="{eff_class}">{eff:.2f}x</td></tr>\n'
         )
@@ -489,16 +517,21 @@ def _build_html(data):
   <canvas id="sectorChart" height="120"></canvas>
 </div>
 
-<h2>Sector Performance</h2>
+<h2>Sector Over/Underweight vs S&amp;P 500</h2>
+<div class="chart-container">
+  <canvas id="overweightChart" height="90"></canvas>
+</div>
+
+<h2>Sector Performance vs S&amp;P 500</h2>
 <div class="table-container">
 <table>
 <thead><tr>
-  <th>Sector</th><th>Avg Weight</th><th>Total Contribution</th><th>Efficiency</th>
+  <th>Sector</th><th>Portfolio</th><th>S&amp;P 500</th><th>Over/Under</th><th>Contribution</th><th>Efficiency</th>
 </tr></thead>
 <tbody>{sector_stats_rows}</tbody>
 </table>
 <p style="color: #8b949e; font-size: 0.8em; margin-top: 10px;">
-  Efficiency = total return contribution / average weight. Higher = more return per unit of allocation.</p>
+  Efficiency = total return contribution / average weight. Over/Under = portfolio weight minus S&amp;P 500 weight.</p>
 </div>
 
 </div><!-- end tab-sectors -->
@@ -616,11 +649,13 @@ new Chart(document.getElementById('rollChart'), {{
   }}
 }});
 
-// Sector chart with relative performance overlay
+// Sector charts
 const sectorLabels = {sector_dates_json};
 const sectorDatasets = {sector_datasets_json};
 const relPerf = {rel_perf_json};
+const overweightDatasets = {overweight_json};
 let sectorChart = null;
+let overweightChart = null;
 
 function initSectorChart() {{
   if (sectorChart) return;
@@ -680,14 +715,39 @@ function initSectorChart() {{
   }});
 }}
 
+function initOverweightChart() {{
+  if (overweightChart) return;
+  const ctx = document.getElementById('overweightChart');
+  if (!ctx) return;
+  overweightChart = new Chart(ctx, {{
+    type: 'line',
+    data: {{ labels: sectorLabels, datasets: overweightDatasets }},
+    options: {{
+      responsive: true,
+      interaction: {{ mode: 'index', intersect: false }},
+      scales: {{
+        x: {{ type: 'time', time: {{ unit: 'year' }}, ticks: {{ color: '#8b949e' }}, grid: {{ color: '#21262d' }} }},
+        y: {{ ticks: {{ color: '#8b949e', callback: v => (v > 0 ? '+' : '') + v + '%' }},
+              grid: {{ color: '#21262d' }} ,
+              title: {{ display: true, text: 'Over/Underweight vs S&P 500', color: '#8b949e' }} }}
+      }},
+      plugins: {{
+        legend: {{ labels: {{ color: '#8b949e' }}, position: 'right' }},
+        title: {{ display: true, text: 'Portfolio Sector Tilt vs S&P 500 (0 = market weight)', color: '#e0e0e0' }},
+        annotation: {{ annotations: {{ zero: {{ type: 'line', yMin: 0, yMax: 0, borderColor: '#8b949e', borderWidth: 1, borderDash: [4,4] }} }} }}
+      }},
+      elements: {{ point: {{ radius: 0 }} }}
+    }}
+  }});
+}}
+
 // Tab switching
 function switchTab(name) {{
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
   event.target.classList.add('active');
   document.getElementById('tab-' + name).classList.add('active');
-  // Lazy init sector chart when tab is first shown
-  if (name === 'sectors') setTimeout(initSectorChart, 50);
+  if (name === 'sectors') setTimeout(() => {{ initSectorChart(); initOverweightChart(); }}, 50);
 }}
 </script>
 </body>

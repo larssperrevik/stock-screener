@@ -203,6 +203,47 @@ def run_with_holdings_tracking(start="2011-01-01", end="2024-09-30"):
     return daily_holdings, sector_map
 
 
+def _compute_sp500_sector_weights(monthly_dates, sector_map):
+    """Compute S&P 500 sector weights at each monthly date using market caps."""
+    from data.simfin_loader import get_sp500_tickers, SIMFIN_DIR
+
+    sp500 = set(get_sp500_tickers())
+
+    # Load market caps directly from SimFin source (has Market-Cap column)
+    print("  Loading market cap data from SimFin source...")
+    prices = pd.read_csv(
+        SIMFIN_DIR / "us-derived-shareprices-daily.csv", sep=";",
+        usecols=["Ticker", "Date", "Market-Cap"], parse_dates=["Date"],
+        dtype={"Ticker": str}
+    )
+    mcap_data = prices[prices["Ticker"].isin(sp500)].copy()
+    mcap_data = mcap_data.dropna(subset=["Market-Cap"])
+    mcap_data["Market-Cap"] = pd.to_numeric(mcap_data["Market-Cap"], errors="coerce")
+
+    sp_weights = {}
+    for date_str in monthly_dates:
+        date = pd.Timestamp(date_str)
+        # Get market caps near this date
+        window = mcap_data[
+            (mcap_data["Date"] >= date - pd.Timedelta(days=10)) &
+            (mcap_data["Date"] <= date + pd.Timedelta(days=5))
+        ]
+        if window.empty:
+            sp_weights[date_str] = {}
+            continue
+
+        latest = window.sort_values("Date").groupby("Ticker").last()
+        latest["Sector"] = latest.index.map(lambda t: sector_map.get(t, "Unknown"))
+        sector_caps = latest.groupby("Sector")["Market-Cap"].sum()
+        total = sector_caps.sum()
+        if total > 0:
+            sp_weights[date_str] = (sector_caps / total).to_dict()
+        else:
+            sp_weights[date_str] = {}
+
+    return sp_weights
+
+
 def build_sector_report(daily_holdings):
     """Analyze sector weights and performance."""
     dates = [d["date"] for d in daily_holdings]
@@ -330,6 +371,50 @@ def build_sector_report(daily_holdings):
         "values": rel_values,
     }
 
+    # S&P 500 sector weights for comparison
+    # Build sector map from daily_holdings context
+    companies = load_companies()
+    industries_df = load_industries()
+    sector_map_full = {}
+    for _, co in companies.iterrows():
+        t = co["Ticker"]
+        ind_id = co.get("IndustryId")
+        if pd.notna(ind_id):
+            ind = industries_df[industries_df["IndustryId"] == ind_id]
+            sector_map_full[t] = ind.iloc[0].get("Sector", "Unknown") if not ind.empty else "Unknown"
+        else:
+            sector_map_full[t] = "Unknown"
+
+    sp500_weights = _compute_sp500_sector_weights(monthly_dates, sector_map_full)
+
+    # Build monthly S&P 500 sector weight series
+    sp500_monthly = {s: [] for s in all_sectors}
+    for date_str in monthly_dates:
+        sw = sp500_weights.get(date_str, {})
+        for s in all_sectors:
+            sp500_monthly[s].append(sw.get(s, 0))
+
+    # Compute over/underweight per sector per month
+    overweight_monthly = {s: [] for s in all_sectors}
+    for i, date_str in enumerate(monthly_dates):
+        for s in all_sectors:
+            port_w = monthly_weights[s][i] if i < len(monthly_weights[s]) else 0
+            sp_w = sp500_monthly[s][i] if i < len(sp500_monthly[s]) else 0
+            overweight_monthly[s].append(port_w - sp_w)
+
+    # Summary stats
+    print("\n\nSECTOR OVER/UNDERWEIGHT vs S&P 500")
+    print("-" * 65)
+    print(f"  {'Sector':<23} {'Port Wt':>9} {'S&P Wt':>9} {'Over/Under':>11}")
+    print("-" * 65)
+    for s in all_sectors:
+        avg_port = np.mean(monthly_weights[s])
+        avg_sp = np.mean(sp500_monthly[s])
+        diff = avg_port - avg_sp
+        if avg_port > 0.01 or avg_sp > 0.01:
+            diff_class = "+" if diff > 0 else ""
+            print(f"  {s:<23} {avg_port:>8.1%} {avg_sp:>8.1%} {diff_class}{diff:>9.1%}")
+
     return {
         "dates": monthly_dates,
         "weights": monthly_weights,
@@ -337,6 +422,8 @@ def build_sector_report(daily_holdings):
         "sectors": all_sectors,
         "stats": sector_stats,
         "relative_performance": relative_performance,
+        "sp500_weights": sp500_monthly,
+        "overweight": overweight_monthly,
     }
 
 
