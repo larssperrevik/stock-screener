@@ -694,7 +694,7 @@ function initSectorChart() {{
               title: {{ display: true, text: 'Sector Weight', color: '#8b949e' }} }},
         y2: {{ position: 'right', grid: {{ drawOnChartArea: false }},
               ticks: {{ color: '#ffffff', callback: v => (v > 0 ? '+' : '') + v + '%' }},
-              title: {{ display: true, text: 'vs S&P 500 (cumulative)', color: '#ffffff' }} }}
+              title: {{ display: true, text: 'Quarterly Excess vs S&P 500', color: '#ffffff' }} }}
       }},
       plugins: {{
         legend: {{ labels: {{ color: '#8b949e' }}, position: 'right' }},

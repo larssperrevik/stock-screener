@@ -333,37 +333,26 @@ def build_sector_report(daily_holdings):
         vol = np.std(rets) * np.sqrt(252)
         print(f"  {sector:<25} {n_days:>5} days  Ann.Return: {ann_ret:>7.1%}  Vol: {vol:>6.1%}")
 
-    # Smoothed relative performance (portfolio vs SPY)
-    # Cumulative daily, then resample to monthly, smooth with 3-month MA
-    port_cum = []
-    spy_cum = []
-    cum_p = 1.0
-    cum_s = 1.0
-    daily_dates = []
-    for d in daily_holdings:
-        cum_p *= (1 + d["port_return"])
-        cum_s *= (1 + d["spy_return"])
-        daily_dates.append(d["date"])
-        port_cum.append(cum_p)
-        spy_cum.append(cum_s)
+    # Quarterly excess return (portfolio return minus SPY return per quarter, smoothed)
+    daily_dates = [d["date"] for d in daily_holdings]
+    port_daily = pd.Series([d["port_return"] for d in daily_holdings], index=daily_dates)
+    spy_daily = pd.Series([d["spy_return"] for d in daily_holdings], index=daily_dates)
 
-    # Relative: portfolio / SPY - 1 (0 = equal, positive = outperforming)
-    relative_daily = pd.Series(
-        [p / s - 1 if s > 0 else 0 for p, s in zip(port_cum, spy_cum)],
-        index=daily_dates
-    )
-    # Resample to match monthly_dates exactly
-    relative_monthly = relative_daily.resample("MS").last()
-    relative_smoothed = relative_monthly.rolling(3, min_periods=1).mean()
+    # Compound to quarterly returns
+    port_quarterly = (1 + port_daily).resample("QS").prod() - 1
+    spy_quarterly = (1 + spy_daily).resample("QS").prod() - 1
+    excess_quarterly = port_quarterly - spy_quarterly
+
+    # Smooth with 2-quarter rolling average
+    excess_smoothed = excess_quarterly.rolling(2, min_periods=1).mean()
 
     # Align to sector monthly_dates
     target_dates = pd.to_datetime(monthly_dates)
     rel_values = []
     for d in target_dates:
-        # Find closest date in smoothed series
-        mask = relative_smoothed.index <= d
+        mask = excess_smoothed.index <= d
         if mask.any():
-            rel_values.append(round(float(relative_smoothed[mask].iloc[-1]) * 100, 2))
+            rel_values.append(round(float(excess_smoothed[mask].iloc[-1]) * 100, 2))
         else:
             rel_values.append(0.0)
 
