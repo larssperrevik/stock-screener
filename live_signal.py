@@ -74,13 +74,13 @@ def get_current_signals(criteria=None, buy_threshold=40, top_n=30):
         publish_date = latest["Publish Date"]
         days_since = (today - publish_date).days
 
-        # In live mode, don't skip on staleness — we show what we have
-        # The freshness bonus still rewards recent reports
-
         # Get price history for valuation-vs-history
         ticker_prices = price_by_ticker.get(ticker)
         if ticker_prices is not None:
             hist = ticker_prices[ticker_prices.index <= today]
+            # Skip tickers with no recent price data (delisted/acquired)
+            if (today - hist.index.max()).days > 30:
+                continue
         else:
             hist = None
 

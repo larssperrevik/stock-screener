@@ -32,6 +32,23 @@ def load_derived_annual():
     df = pd.read_csv(SIMFIN_DIR / "us-derived-annual.csv", sep=";",
                       parse_dates=["Report Date", "Publish Date", "Restated Date"])
     df["Fiscal Year"] = df["Fiscal Year"].astype(int)
+
+    # Merge API supplement (newer records fetched via SimFin API)
+    derived_supplement = SIMFIN_DIR / "derived_supplement.csv"
+    if derived_supplement.exists():
+        sup = pd.read_csv(derived_supplement, parse_dates=["Report Date", "Publish Date"])
+        if "Fiscal Year" in sup.columns:
+            sup["Fiscal Year"] = sup["Fiscal Year"].astype(int)
+        if not sup.empty:
+            # Align columns
+            for col in df.columns:
+                if col not in sup.columns:
+                    sup[col] = None
+            common = [c for c in df.columns if c in sup.columns]
+            df = pd.concat([df[common], sup[common]], ignore_index=True)
+            df = df.drop_duplicates(subset=["Ticker", "Fiscal Year", "Fiscal Period"], keep="last")
+            print(f"  Derived supplement: +{len(sup)} records")
+
     return df
 
 
