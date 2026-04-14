@@ -668,11 +668,20 @@ function initSectorChart() {{
     allDatasets.push({{
       label: 'vs S&P 500',
       data: relPerf.values,
-      borderColor: '#ffffff',
-      backgroundColor: 'transparent',
+      segment: {{
+        borderColor: ctx => {{
+          const v = ctx.p1.parsed.y;
+          return v >= 0 ? 'rgb(63, 185, 80)' : 'rgb(248, 81, 73)';
+        }},
+        backgroundColor: ctx => {{
+          const v = ctx.p1.parsed.y;
+          return v >= 0 ? 'rgba(63, 185, 80, 0.15)' : 'rgba(248, 81, 73, 0.15)';
+        }},
+      }},
+      borderColor: 'rgb(63, 185, 80)',
+      backgroundColor: 'rgba(63, 185, 80, 0.15)',
       borderWidth: 2.5,
-      borderDash: [6, 3],
-      fill: false,
+      fill: {{ target: 'origin' }},
       yAxisID: 'y2',
       pointRadius: 0,
       order: -1,
