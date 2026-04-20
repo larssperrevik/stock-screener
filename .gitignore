@@ -5,3 +5,21 @@ __pycache__/
 data/cache/
 .ipynb_checkpoints/
 config.json
+
+# Logs
+*.log
+
+# Backups
+*.bak
+
+# Bulk data (SimFin downloads, supplements, price cache)
+data/simfin/
+data/*.zip
+
+# ML datasets (large, regeneratable)
+data/*.parquet
+
+# Generated dashboards and signals
+dashboard.html
+sector_analysis.html
+signals.txt
