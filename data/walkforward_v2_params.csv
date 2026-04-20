@@ -1,0 +1,11 @@
+test_start,test_end,params
+2016-01-01,2016-12-31,"{'buy_threshold': 40, 'sell_threshold': 15, 'max_positions': 15, 'max_hold_days': 365, 'min_hold_days': 30}"
+2017-01-01,2017-12-31,"{'buy_threshold': 50, 'sell_threshold': 15, 'max_positions': 15, 'max_hold_days': 365, 'min_hold_days': 30}"
+2018-01-01,2018-12-31,"{'buy_threshold': 50, 'sell_threshold': 15, 'max_positions': 15, 'max_hold_days': 720, 'min_hold_days': 30}"
+2019-01-01,2019-12-31,"{'buy_threshold': 40, 'sell_threshold': 15, 'max_positions': 15, 'max_hold_days': 365, 'min_hold_days': 30}"
+2020-01-01,2020-12-31,"{'buy_threshold': 40, 'sell_threshold': 15, 'max_positions': 15, 'max_hold_days': 540, 'min_hold_days': 30}"
+2021-01-01,2021-12-31,"{'buy_threshold': 35, 'sell_threshold': 15, 'max_positions': 15, 'max_hold_days': 540, 'min_hold_days': 30}"
+2022-01-01,2022-12-31,"{'buy_threshold': 35, 'sell_threshold': 15, 'max_positions': 15, 'max_hold_days': 540, 'min_hold_days': 30}"
+2023-01-01,2023-12-31,"{'buy_threshold': 50, 'sell_threshold': 15, 'max_positions': 15, 'max_hold_days': 540, 'min_hold_days': 30}"
+2024-01-01,2024-12-31,"{'buy_threshold': 35, 'sell_threshold': 15, 'max_positions': 15, 'max_hold_days': 180, 'min_hold_days': 30}"
+2025-01-01,2025-12-31,"{'buy_threshold': 40, 'sell_threshold': 15, 'max_positions': 15, 'max_hold_days': 180, 'min_hold_days': 30}"
