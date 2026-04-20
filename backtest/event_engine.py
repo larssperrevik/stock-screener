@@ -137,11 +137,12 @@ def compute_stock_score(ticker, derived_row, price_history, all_derived_ticker):
     if len(all_derived_ticker) >= 2:
         # Share buyback
         eqps = all_derived_ticker["Equity Per Share"].dropna().tail(3)
-        if len(eqps) >= 2:
+        if len(eqps) >= 2 and eqps.iloc[0] not in (0, None) and not pd.isna(eqps.iloc[0]):
             eq_growth = (eqps.iloc[-1] / eqps.iloc[0]) - 1
-            if eq_growth > 0.1:  # growing equity per share
-                score += 3
-            details["eq_per_share_growth"] = eq_growth
+            if pd.notna(eq_growth):
+                if eq_growth > 0.1:  # growing equity per share
+                    score += 3
+                details["eq_per_share_growth"] = eq_growth
 
         # Debt discipline
         debt = all_derived_ticker["Debt Ratio"].dropna().tail(3)
