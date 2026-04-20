@@ -459,6 +459,30 @@ class EventDrivenEngine:
                         peak_price=current_price,
                     )
 
+            # === FORCE-SELL DELISTED POSITIONS ===
+            # Tickers that stop trading (acquisition, bankruptcy, delisting) never
+            # publish new reports, so they never re-enter tickers_to_evaluate and
+            # can squat on a portfolio slot forever. If a held position has not
+            # traded for 14+ calendar days, force-sell at last known price.
+            for ticker in list(positions.keys()):
+                if ticker not in price_by_ticker:
+                    continue
+                t_prices = price_by_ticker[ticker]
+                last_trade_date = t_prices.index.max()
+                if day - last_trade_date > pd.Timedelta(days=14):
+                    pos = positions[ticker]
+                    last_valid_price = t_prices['Adj. Close'].iloc[-1]
+                    if pd.notna(last_valid_price) and pos.entry_price > 0:
+                        ret = (last_valid_price / pos.entry_price) - 1
+                        days_held = (last_trade_date - pos.entry_date).days
+                        trades.append(Trade(
+                            ticker=ticker, entry_date=pos.entry_date,
+                            exit_date=last_trade_date, entry_price=pos.entry_price,
+                            exit_price=last_valid_price, return_pct=ret,
+                            hold_days=days_held, reason='delisted',
+                        ))
+                    del positions[ticker]
+
             # === UPDATE PEAK PRICES AND CHECK TRAILING STOPS ===
             if self.trailing_stop > 0:
                 for ticker in list(positions.keys()):
