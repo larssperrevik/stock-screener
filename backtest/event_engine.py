@@ -484,32 +484,6 @@ class EventDrivenEngine:
                         ))
                     del positions[ticker]
 
-            # === FORCE MAX_HOLD ENFORCEMENT ===
-            # max_hold_days in SELL LOGIC only fires when a new report arrives.
-            # Positions whose fundamentals pipeline dries up sit past max_hold
-            # forever. Daily scan: if days_held >= max_hold_days, sell at current
-            # price with reason=max_hold_stale. Normal buy logic will re-enter
-            # on subsequent days if the ticker still passes the screen, so this
-            # preserves max_hold as a forced re-evaluation point.
-            for ticker in list(positions.keys()):
-                pos = positions[ticker]
-                days_held = (day - pos.entry_date).days
-                if days_held < self.max_hold_days:
-                    continue
-                if ticker not in price_matrix.columns:
-                    continue
-                current_price = price_matrix.loc[day, ticker]
-                if not (pd.notna(current_price) and current_price > 0):
-                    continue
-                ret = (current_price / pos.entry_price) - 1
-                trades.append(Trade(
-                    ticker=ticker, entry_date=pos.entry_date,
-                    exit_date=day, entry_price=pos.entry_price,
-                    exit_price=current_price, return_pct=ret,
-                    hold_days=days_held, reason='max_hold_stale',
-                ))
-                del positions[ticker]
-
             # === UPDATE PEAK PRICES AND CHECK TRAILING STOPS ===
             if self.trailing_stop > 0:
                 for ticker in list(positions.keys()):
