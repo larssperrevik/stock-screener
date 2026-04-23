@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from data.simfin_loader import load_derived_annual, load_prices, load_companies, load_industries
+from data.simfin_loader import load_derived_annual, load_derived_quarterly, load_prices, load_companies, load_industries
 from screener.criteria import ScreenCriteria, apply_screen
 from metrics.performance import full_report, print_report
 
@@ -196,6 +196,7 @@ class EventDrivenEngine:
         start_date="2011-01-01",
         end_date="2024-09-30",
         benchmark="SPY",
+        fundamentals_period="annual",
     ):
         self.criteria = criteria or ScreenCriteria()
         self.trailing_stop = trailing_stop
@@ -212,10 +213,14 @@ class EventDrivenEngine:
         self.start_date = pd.Timestamp(start_date)
         self.end_date = pd.Timestamp(end_date)
         self.benchmark = benchmark
+        self.fundamentals_period = fundamentals_period
 
     def run(self, quiet=False):
         """Run the event-driven backtest."""
-        derived = load_derived_annual()
+        if getattr(self, "fundamentals_period", "annual") == "quarterly":
+            derived = load_derived_quarterly()
+        else:
+            derived = load_derived_annual()
         prices = load_prices()
 
         if not quiet:

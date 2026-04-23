@@ -53,6 +53,35 @@ def load_derived_annual():
 
 
 @lru_cache(maxsize=1)
+def load_derived_quarterly():
+    """Quarterly derived fundamentals, bulk + API supplement.
+
+    Columns mirror load_derived_annual(): ROE, ROIC, Piotroski, margins,
+    Current Ratio, etc. — at quarterly cadence. Piotroski F-Score is
+    pre-computed quarterly by SimFin (quarter vs same-quarter-prior-year).
+    """
+    df = pd.read_csv(SIMFIN_DIR / "us-derived-quarterly.csv", sep=";",
+                      parse_dates=["Report Date", "Publish Date", "Restated Date"])
+    df["Fiscal Year"] = df["Fiscal Year"].astype(int)
+
+    sup_file = SIMFIN_DIR / "derived_quarterly_supplement.csv"
+    if sup_file.exists():
+        sup = pd.read_csv(sup_file, parse_dates=["Report Date", "Publish Date"])
+        if "Fiscal Year" in sup.columns:
+            sup["Fiscal Year"] = sup["Fiscal Year"].astype(int)
+        if not sup.empty:
+            for col in df.columns:
+                if col not in sup.columns:
+                    sup[col] = None
+            common = [c for c in df.columns if c in sup.columns]
+            df = pd.concat([df[common], sup[common]], ignore_index=True)
+            df = df.drop_duplicates(subset=["Ticker", "Fiscal Year", "Fiscal Period"], keep="last")
+            print(f"  Derived quarterly supplement: +{len(sup)} records")
+
+    return df
+
+
+@lru_cache(maxsize=1)
 def load_prices():
     """Load daily price data, merging SimFin + FMP supplement if available."""
     print("Loading price data (this may take a minute on first load)...")
