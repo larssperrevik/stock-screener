@@ -18,9 +18,18 @@ from backtest.event_engine import EventDrivenEngine, Position, Trade, compute_st
 from screener.criteria import ScreenCriteria
 from metrics.performance import full_report
 from data.simfin_loader import (
-    load_derived_annual, load_prices, load_companies, load_industries,
+    load_derived_annual, load_derived_quarterly, load_prices,
+    load_companies, load_industries,
     get_sp500_tickers, SIMFIN_DIR,
 )
+
+# CLI: --quarterly switches to quarterly fundamentals + opt stale_data_days override
+import sys as _sys
+FUNDAMENTALS_PERIOD = 'quarterly' if '--quarterly' in _sys.argv else 'annual'
+STALE_DATA_DAYS = 150 if FUNDAMENTALS_PERIOD == 'quarterly' else 99999
+
+def _load_derived():
+    return load_derived_quarterly() if FUNDAMENTALS_PERIOD == 'quarterly' else load_derived_annual()
 
 
 # === PARAMETER GRID (~48 combos) ===
@@ -93,6 +102,8 @@ def train_fold(combos, train_start, train_end):
             criteria=criteria,
             start_date=train_start,
             end_date=train_end,
+            fundamentals_period=FUNDAMENTALS_PERIOD,
+            stale_data_days=STALE_DATA_DAYS,
             **combo,
             **FIXED,
         )
@@ -121,7 +132,7 @@ def run_continuous_oos(fold_params):
 
     # Load all data once
     print("Loading data...")
-    derived = load_derived_annual()
+    derived = _load_derived()
     prices = load_prices()
     companies = load_companies()
     industries_df = load_industries()
@@ -198,6 +209,8 @@ def run_continuous_oos(fold_params):
     # Create a temporary engine just for helper methods
     temp_engine = EventDrivenEngine(
         criteria=criteria,
+        fundamentals_period=FUNDAMENTALS_PERIOD,
+        stale_data_days=STALE_DATA_DAYS,
         **current_params,
         **FIXED,
     )
