@@ -197,6 +197,7 @@ class EventDrivenEngine:
         end_date="2024-09-30",
         benchmark="SPY",
         fundamentals_period="annual",
+        stale_data_days=150,  # held position auto-sold if latest report this old
     ):
         self.criteria = criteria or ScreenCriteria()
         self.trailing_stop = trailing_stop
@@ -214,6 +215,7 @@ class EventDrivenEngine:
         self.end_date = pd.Timestamp(end_date)
         self.benchmark = benchmark
         self.fundamentals_period = fundamentals_period
+        self.stale_data_days = stale_data_days
 
     def run(self, quiet=False):
         """Run the event-driven backtest."""
@@ -243,7 +245,7 @@ class EventDrivenEngine:
                 continue
             derived_by_ticker[ticker] = group.sort_values("Publish Date")
 
-        # Build sector map for sector cap enforcement
+                # Build sector map for sector cap enforcement
         companies = load_companies()
         industries_df = load_industries()
         sector_map = {}
@@ -464,6 +466,35 @@ class EventDrivenEngine:
                         last_report_date=publish_date,
                         peak_price=current_price,
                     )
+
+            # === FORCE-SELL STALE-DATA POSITIONS ===
+            # Held position whose latest published fundamentals are older than
+            # stale_data_days: pipeline may be broken (WFG-type) or company has
+            # gone quiet. Force-sell at current price. min_hold_days protects
+            # against thrashing on freshly-bought positions whose data is stale
+            # at entry.
+            for ticker in list(positions.keys()):
+                if ticker not in derived_by_ticker:
+                    continue
+                avail = derived_by_ticker[ticker]
+                avail = avail[avail["Publish Date"] <= day]
+                if avail.empty:
+                    continue
+                latest_publish = avail.iloc[-1]["Publish Date"]
+                days_stale = (day - latest_publish).days
+                pos = positions[ticker]
+                days_held = (day - pos.entry_date).days
+                if days_stale > self.stale_data_days and days_held >= self.min_hold_days:
+                    cp = price_matrix.loc[day, ticker] if ticker in price_matrix.columns else None
+                    if pd.notna(cp) and cp > 0 and pos.entry_price > 0:
+                        ret = (cp / pos.entry_price) - 1
+                        trades.append(Trade(
+                            ticker=ticker, entry_date=pos.entry_date,
+                            exit_date=day, entry_price=pos.entry_price,
+                            exit_price=cp, return_pct=ret,
+                            hold_days=days_held, reason="stale_data",
+                        ))
+                        del positions[ticker]
 
             # === FORCE-SELL DELISTED POSITIONS ===
             # Tickers that stop trading (acquisition, bankruptcy, delisting) never
