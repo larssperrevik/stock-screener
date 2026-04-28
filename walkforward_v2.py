@@ -23,13 +23,18 @@ from data.simfin_loader import (
     get_sp500_tickers, SIMFIN_DIR,
 )
 
-# CLI: --quarterly switches to quarterly fundamentals + opt stale_data_days override
+# CLI flags: --quarterly switches to quarterly fundamentals;
+# --trend-filter requires price >= 200-day SMA at buy time.
 import sys as _sys
 FUNDAMENTALS_PERIOD = 'quarterly' if '--quarterly' in _sys.argv else 'annual'
 STALE_DATA_DAYS = 150 if FUNDAMENTALS_PERIOD == 'quarterly' else 99999
+TREND_FILTER = '--trend-filter' in _sys.argv
 
 def _load_derived():
     return load_derived_quarterly() if FUNDAMENTALS_PERIOD == 'quarterly' else load_derived_annual()
+
+def _make_criteria():
+    return ScreenCriteria(require_above_200dma=TREND_FILTER)
 
 
 # === PARAMETER GRID (~48 combos) ===
@@ -92,7 +97,7 @@ TEST_YEARS = 1
 
 def train_fold(combos, train_start, train_end):
     """Sweep all combos on training window, return best by Sortino."""
-    criteria = ScreenCriteria()
+    criteria = _make_criteria()
     best_sortino = -999
     best_combo = combos[0]
     best_result = None
@@ -128,7 +133,7 @@ def run_continuous_oos(fold_params):
     The engine runs from the first test_start through the last test_end,
     switching buy/sell/hold thresholds at each boundary while keeping positions.
     """
-    criteria = ScreenCriteria()
+    criteria = _make_criteria()
 
     # Load all data once
     print("Loading data...")
