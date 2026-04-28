@@ -21,6 +21,10 @@ class ScreenCriteria:
     min_fcf_to_net_income: float = 0.8     # Cash conversion
     min_piotroski: int = 5                 # Pre-computed in SimFin
     min_roic: float = 0.10
+    # Earnings momentum + trend filter (opt-in; default off)
+    min_eps_yoy_growth: float = None  # require EPS YoY growth >= this (e.g., 0.0)
+    require_eps_acceleration: bool = False  # require this Q YoY growth >= prior Q YoY growth
+    require_above_200dma: bool = False  # require current price >= 200-day SMA
 
 
 def apply_screen(fundamentals_df, criteria=None):

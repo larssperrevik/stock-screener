@@ -112,7 +112,42 @@ def compute_stock_score(ticker, derived_row, price_history, all_derived_ticker):
                 score += 2  # stable is ok
             details["om_trend"] = om_trend
 
-    # === VALUATION VS OWN HISTORY (0-25 points) ===
+    # === EARNINGS MOMENTUM (0-10 points) ===
+    eps_col = "Earnings Per Share, Diluted"
+    if eps_col in all_derived_ticker.columns:
+        eps_series = all_derived_ticker[eps_col].dropna()
+        if len(eps_series) >= 5:
+            eps_now = eps_series.iloc[-1]
+            eps_yoy_ago = eps_series.iloc[-5]  # 4 quarters / 4 years ago
+            if pd.notna(eps_yoy_ago) and eps_yoy_ago != 0 and pd.notna(eps_now):
+                yoy_growth = eps_now / eps_yoy_ago - 1
+                details["eps_yoy_growth"] = yoy_growth
+                if yoy_growth > 0.30: score += 6
+                elif yoy_growth > 0.15: score += 4
+                elif yoy_growth > 0: score += 2
+                # Acceleration: this YoY vs prior YoY
+                if len(eps_series) >= 6:
+                    eps_prior = eps_series.iloc[-2]
+                    eps_prior_yoy_ago = eps_series.iloc[-6]
+                    if pd.notna(eps_prior_yoy_ago) and eps_prior_yoy_ago != 0 and pd.notna(eps_prior):
+                        prior_yoy = eps_prior / eps_prior_yoy_ago - 1
+                        accel = yoy_growth - prior_yoy
+                        details["eps_acceleration"] = accel
+                        if accel > 0: score += 4
+
+    # === TREND FLAG (0 score impact, just a flag for the buy gate) ===
+    if price_history is not None and len(price_history) > 0:
+        adj_col = "Adj. Close"
+        if adj_col in price_history.columns:
+            closes = price_history[adj_col].dropna()
+            if len(closes) >= 200:
+                current = closes.iloc[-1]
+                sma200 = closes.tail(200).mean()
+                if pd.notna(current) and pd.notna(sma200) and sma200 > 0:
+                    details["above_200dma"] = bool(current >= sma200)
+                    details["price_vs_sma200"] = current / sma200 - 1
+
+        # === VALUATION VS OWN HISTORY (0-25 points) ===
     # Is this stock cheap relative to its own 5-year average?
     if price_history is not None and len(price_history) > 0:
         for ratio_col, weight in [
@@ -424,6 +459,20 @@ class EventDrivenEngine:
                     current_price = price_matrix.loc[day, ticker]
                     if not (pd.notna(current_price) and current_price > 0):
                         continue
+
+                    # Earnings momentum gates (opt-in)
+                    if self.criteria.min_eps_yoy_growth is not None:
+                        eps_g = details.get("eps_yoy_growth")
+                        if eps_g is None or eps_g < self.criteria.min_eps_yoy_growth:
+                            continue
+                    if self.criteria.require_eps_acceleration:
+                        eps_a = details.get("eps_acceleration")
+                        if eps_a is None or eps_a < 0:
+                            continue
+                    # Trend filter (opt-in)
+                    if self.criteria.require_above_200dma:
+                        if not details.get("above_200dma", False):
+                            continue
 
                     # Check sector overweight cap
                     if not self._check_sector_cap(ticker, positions, sector_map, day, sp_mcap_data, sp_sector_weight_cache):
