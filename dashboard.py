@@ -321,7 +321,7 @@ def _build_html(data):
             f"<td>{s.get('sector','')}</td>"
             f"<td>{_pct(s.get('roe'))}</td>"
             f"<td>{_pct(s.get('roic'))}</td>"
-            f"<td>{int(s.get('piotroski') or 0)}</td>"
+            f"<td>{int(s.get('piotroski') or 0) if pd.notna(s.get('piotroski')) else 0}</td>"
             f"<td>{_pct(s.get('gross_margin'))}</td>"
             f"<td>{_pct(s.get('op_margin'))}</td>"
             f"<td>{_pct(s.get('debt_ratio'))}</td>"
