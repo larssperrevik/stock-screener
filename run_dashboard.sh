@@ -4,8 +4,11 @@ source .venv/bin/activate
 
 echo "$(date): Starting daily run" >> dashboard.log
 
-# Update fundamentals from SimFin API (incremental, ~2.5hrs first run, fast after)
-python3 update_fundamentals.py >> dashboard.log 2>&1
+# Refresh prices via Yahoo v8 (native on .113; was Windows-only previously)
+python3 fill_prices_v8.py >> dashboard.log 2>&1
+
+# Update quarterly fundamentals from SimFin API (incremental)
+python3 update_fundamentals_quarterly.py >> dashboard.log 2>&1
 
 # Generate dashboard
 python3 dashboard.py --freq quarterly --top-n 20 -o dashboard.html >> dashboard.log 2>&1
