@@ -24,7 +24,7 @@ class ScreenCriteria:
     # Earnings momentum + trend filter (opt-in; default off)
     min_eps_yoy_growth: float = None  # require EPS YoY growth >= this (e.g., 0.0)
     require_eps_acceleration: bool = False  # require this Q YoY growth >= prior Q YoY growth
-    require_above_200dma: bool = False  # require current price >= 200-day SMA
+    require_above_200dma: bool = True  # require current price >= 200-day SMA (validated +4.71pp OOS)
 
 
 def apply_screen(fundamentals_df, criteria=None):

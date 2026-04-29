@@ -13,7 +13,7 @@ import numpy as np
 from datetime import datetime
 from pathlib import Path
 
-from data.simfin_loader import load_derived_annual, load_prices, load_companies, load_industries
+from data.simfin_loader import load_derived_annual, load_derived_quarterly, load_prices, load_companies, load_industries
 from screener.criteria import ScreenCriteria, apply_screen
 from backtest.event_engine import compute_stock_score
 
@@ -23,7 +23,7 @@ def get_current_signals(criteria=None, buy_threshold=40, top_n=30):
     if criteria is None:
         criteria = ScreenCriteria()
 
-    derived = load_derived_annual()
+    derived = load_derived_quarterly()
     prices = load_prices()
     companies = load_companies()
     industries = load_industries()
@@ -187,7 +187,7 @@ def score_portfolio(tickers, criteria=None, buy_threshold=40):
     if criteria is None:
         criteria = ScreenCriteria()
 
-    derived = load_derived_annual()
+    derived = load_derived_quarterly()
     prices = load_prices()
     companies = load_companies()
 

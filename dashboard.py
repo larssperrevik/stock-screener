@@ -154,9 +154,10 @@ def generate_dashboard(
     combined_start = "2011-01-01"
     print("\nRunning event-driven strategy...")
     event_engine = EventDrivenEngine(
-        criteria=criteria, max_positions=15, max_hold_days=540,
+        criteria=criteria, max_positions=15, max_hold_days=365,
         min_hold_days=30, buy_threshold=40, sell_threshold=15,
         max_correlation=0.65, max_sector_overweight=0.40,
+        fundamentals_period="quarterly", stale_data_days=150,
         start_date=combined_start, end_date=end,
     )
     event_result = event_engine.run()
