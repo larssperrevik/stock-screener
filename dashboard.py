@@ -54,13 +54,34 @@ def _rolling_returns_json(returns, window, label, smooth=21):
 
 
 def latest_screen_with_returns(criteria=None, screen_date="2024-07-01"):
-    """Run screen at a date and compute returns to today using live FMP prices."""
+    """Run screen at a date and compute returns to today using live FMP prices.
+
+    Uses quarterly fundamentals + the engine's full criteria (including trend
+    filter via _passes_screen on the live engine instance is too heavy here,
+    so we replicate the static gates and skip the price-vs-200dma check; the
+    Latest Screen tab is informational, not the actual portfolio decision).
+    Clamps screen_date to the latest available price date to avoid empty
+    tradeable-ticker lookups when running before market open or with stale data.
+    """
     if criteria is None:
         criteria = ScreenCriteria()
 
-    fundamentals = get_all_fundamentals_at_date(screen_date)
+    from data.simfin_loader import load_derived_quarterly, load_prices as _lp
+    all_prices_df = _lp()
+    data_max = all_prices_df["Date"].max()
+    sd = pd.Timestamp(screen_date)
+    if sd > data_max:
+        sd = data_max
+    screen_date = sd.strftime("%Y-%m-%d")
+
+    derived_q = load_derived_quarterly()
+    avail = derived_q[derived_q["Publish Date"] <= sd]
+    fundamentals = avail.sort_values("Publish Date").groupby("Ticker").last().reset_index()
+
     tradeable = get_tradeable_tickers_at_date(screen_date)
     fundamentals = fundamentals[fundamentals["Ticker"].isin(tradeable)]
+    # Drop tickers whose latest report is older than freshness threshold (4 months)
+    fundamentals = fundamentals[(sd - fundamentals["Publish Date"]).dt.days <= 120]
     screened = apply_screen(fundamentals, criteria)
 
     if screened.empty:
