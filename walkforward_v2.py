@@ -39,11 +39,11 @@ def _make_criteria():
 
 # === PARAMETER GRID (~48 combos) ===
 GRID = {
-    "buy_threshold": [35, 40, 50],
-    "sell_threshold": [15, 20],
+    "buy_threshold": [25, 30, 35, 40, 45],  # focused: are we too strict?
+    "sell_threshold": [15],                  # locked (10/10 in WF2)
     "max_positions": [15],
-    "max_hold_days": [180, 365, 540, 720],
-    "min_hold_days": [30, 60],
+    "max_hold_days": [180, 365, 540],        # drop 720 (only 2/10 in WF2)
+    "min_hold_days": [30],                   # locked (10/10 in WF2)
 }
 
 FIXED = {
