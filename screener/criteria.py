@@ -25,6 +25,11 @@ class ScreenCriteria:
     min_eps_yoy_growth: float = None  # require EPS YoY growth >= this (e.g., 0.0)
     require_eps_acceleration: bool = False  # require this Q YoY growth >= prior Q YoY growth
     require_above_200dma: bool = True  # require current price >= 200-day SMA (validated +4.71pp OOS)
+    # Momentum sleeve: separate pool with looser quality floor, ranked by 12m return
+    momentum_sleeve_size: int = 0  # 0 = disabled; e.g., 5 = reserve 5 of 15 slots for momentum
+    momentum_min_roe: float = 0.05
+    momentum_min_piotroski: int = 3
+    momentum_min_12m: float = 0.20  # require >=20% trailing 12m return
 
 
 def apply_screen(fundamentals_df, criteria=None):

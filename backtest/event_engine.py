@@ -31,6 +31,7 @@ class Position:
     score: float
     last_report_date: pd.Timestamp
     peak_price: float = 0.0
+    sleeve: str = "quality"  # "quality" or "momentum"
 
 
 @dataclass
@@ -146,6 +147,12 @@ def compute_stock_score(ticker, derived_row, price_history, all_derived_ticker):
                 if pd.notna(current) and pd.notna(sma200) and sma200 > 0:
                     details["above_200dma"] = bool(current >= sma200)
                     details["price_vs_sma200"] = current / sma200 - 1
+            # 12-month total return — surfaced for downstream filters; no score impact
+            if len(closes) >= 252:
+                current = closes.iloc[-1]
+                year_ago = closes.iloc[-252]
+                if pd.notna(current) and pd.notna(year_ago) and year_ago > 0:
+                    details["momentum_12m"] = current / year_ago - 1
 
         # === VALUATION VS OWN HISTORY (0-25 points) ===
     # Is this stock cheap relative to its own 5-year average?
@@ -340,6 +347,7 @@ class EventDrivenEngine:
             print()
 
         last_log_month = None
+        last_momentum_month = None
         new_reports_today = []
 
         for day in trading_days:
@@ -419,7 +427,16 @@ class EventDrivenEngine:
                     should_sell = False
                     reason = ""
 
-                    if not passes_screen:
+                    # Use the screen that matches the sleeve the position was bought via
+                    if pos.sleeve == "momentum":
+                        sleeve_passes = self._passes_momentum_screen(latest_dict)
+                        # Momentum positions also sell on trend break (below 200dma)
+                        if details.get("above_200dma") is False:
+                            sleeve_passes = False
+                    else:
+                        sleeve_passes = passes_screen
+
+                    if not sleeve_passes:
                         should_sell = True
                         reason = "failed_screen"
                     elif score < self.sell_threshold and days_held >= self.min_hold_days:
@@ -594,6 +611,60 @@ class EventDrivenEngine:
                                 hold_days=days_held, reason="trailing_stop",
                             ))
                             del positions[ticker]
+
+            # === MOMENTUM SLEEVE FILL (monthly) ===
+            # Reserve N slots for momentum picks, ranked by 12m return.
+            # Looser quality floor (positive ROE, F-score >= 3, debt OK) but
+            # still requires above 200dma. Runs once per month to control
+            # turnover, since price-momentum fills don't have a natural
+            # event-trigger like quarterly reports do.
+            if self.criteria.momentum_sleeve_size > 0:
+                cur_month = (day.year, day.month)
+                if cur_month != last_momentum_month:
+                    last_momentum_month = cur_month
+                    n_mom_held = sum(1 for p in positions.values() if p.sleeve == "momentum")
+                    slots_to_fill = min(
+                        self.criteria.momentum_sleeve_size - n_mom_held,
+                        self.max_positions - len(positions),
+                    )
+                    if slots_to_fill > 0:
+                        mom_candidates = []
+                        for mc_ticker in derived_by_ticker:
+                            if mc_ticker in positions: continue
+                            mc_avail = derived_by_ticker[mc_ticker]
+                            mc_avail = mc_avail[mc_avail["Publish Date"] <= day]
+                            if mc_avail.empty: continue
+                            mc_latest = mc_avail.iloc[-1]
+                            mc_pub = mc_latest["Publish Date"]
+                            mc_days_since = (day - mc_pub).days
+                            if mc_days_since > self.freshness_days: continue
+                            mc_dict = mc_latest.to_dict()
+                            if not self._passes_momentum_screen(mc_dict): continue
+                            mc_prices = price_by_ticker.get(mc_ticker)
+                            mc_hist = mc_prices[mc_prices.index <= day] if mc_prices is not None else None
+                            mc_score, mc_det = compute_stock_score(mc_ticker, mc_dict, mc_hist, mc_avail)
+                            if not mc_det.get("above_200dma"): continue
+                            mc_m12 = mc_det.get("momentum_12m")
+                            if mc_m12 is None or mc_m12 < self.criteria.momentum_min_12m: continue
+                            if mc_ticker not in price_matrix.columns: continue
+                            mc_cp = price_matrix.loc[day, mc_ticker]
+                            if not (pd.notna(mc_cp) and mc_cp > 0): continue
+                            mom_candidates.append((mc_ticker, mc_m12, mc_cp, mc_pub, mc_score))
+                        mom_candidates.sort(key=lambda x: -x[1])
+                        for mc_ticker, mc_m12, mc_cp, mc_pub, mc_score in mom_candidates:
+                            if slots_to_fill <= 0: break
+                            if not self._check_sector_cap(mc_ticker, positions, sector_map, day, sp_mcap_data, sp_sector_weight_cache):
+                                continue
+                            # Skip correlation check for momentum sleeve — these are
+                            # often correlated tech names by design (e.g., Mag7 cohort)
+                            positions[mc_ticker] = Position(
+                                ticker=mc_ticker, entry_date=day,
+                                entry_price=mc_cp, score=mc_score,
+                                last_report_date=mc_pub,
+                                peak_price=mc_cp,
+                                sleeve="momentum",
+                            )
+                            slots_to_fill -= 1
 
             # === COMPUTE DAILY PORTFOLIO RETURN ===
             held_tickers = [t for t in positions if t in price_matrix.columns]
@@ -814,6 +885,22 @@ class EventDrivenEngine:
             return False
         if fcf is not None and fcf < c.min_fcf_to_net_income:
             return False
+        return True
+
+    def _passes_momentum_screen(self, row):
+        """Looser screen for momentum sleeve: minimum quality floor + positive growth."""
+        c = self.criteria
+        roe = row.get("Return on Equity")
+        pf = row.get("Piotroski F-Score")
+        # Sanity: not in financial distress
+        dr = row.get("Debt Ratio")
+        if roe is not None and pd.notna(roe) and roe < c.momentum_min_roe:
+            return False
+        if pf is not None and pd.notna(pf) and pf < c.momentum_min_piotroski:
+            return False
+        if dr is not None and pd.notna(dr) and dr > 0.85:
+            return False
+        # Market cap floor still applies (no penny stocks)
         return True
 
 
