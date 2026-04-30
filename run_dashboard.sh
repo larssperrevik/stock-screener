@@ -8,7 +8,7 @@ echo "$(date): Starting daily run" >> dashboard.log
 python3 fill_prices_v8.py >> dashboard.log 2>&1
 
 # Update quarterly fundamentals from SimFin API (incremental)
-python3 update_fundamentals_quarterly.py >> dashboard.log 2>&1
+python3 update_fundamentals_quarterly.py --daily >> dashboard.log 2>&1
 
 # Generate dashboard
 python3 dashboard.py --freq quarterly --top-n 20 -o dashboard.html >> dashboard.log 2>&1

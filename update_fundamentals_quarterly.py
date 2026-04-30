@@ -75,8 +75,43 @@ def main():
 
     prog = load_progress()
     done = set(prog['completed']); bad = set(prog['failed'])
-    todo = [t for t in tickers if t not in done and t not in bad]
-    print(f'Done: {len(done)}, failed: {len(bad)}, remaining: {len(todo)}')
+
+    daily_mode = '--daily' in sys.argv
+    if daily_mode:
+        # Skip tickers that already have fresh quarterly data in supplement.
+        # Only fetch tickers where the latest known publish date is > 70 days old
+        # (i.e., due for a new quarterly report) or that we have no data for at all.
+        from data.simfin_loader import load_derived_quarterly
+        derived = load_derived_quarterly()
+        today = pd.Timestamp.now().normalize()
+        # 100d covers normal quarterly cadence (90d typical + 10d filing lag).
+        # Only tickers older than this are genuinely "missed a cycle" and
+        # potentially have a new report waiting.
+        freshness_cutoff = today - pd.Timedelta(days=100)
+        latest_per_ticker = derived.groupby('Ticker')['Publish Date'].max()
+        stale_series = latest_per_ticker[latest_per_ticker < freshness_cutoff]
+        stale_set = set(stale_series.index)
+        no_data_set = set(tickers) - set(latest_per_ticker.index)
+        candidate = (stale_set | no_data_set) - bad
+        # Sort by stale-est first so the most-overdue get retried first
+        sortable = []
+        for t in tickers:
+            if t not in candidate: continue
+            last = latest_per_ticker.get(t)
+            sortable.append((t, last if last is not None and last is not pd.NaT else pd.Timestamp('1970-01-01')))
+        sortable.sort(key=lambda x: x[1])
+        # Cap at 300 fetches per daily run so a single run can't go > 30 min
+        # Override cap from CLI: --max N (default 300 in daily, unlimited otherwise)
+        DAILY_CAP = 300
+        for i, a in enumerate(sys.argv):
+            if a == '--max' and i+1 < len(sys.argv):
+                DAILY_CAP = int(sys.argv[i+1])
+        todo = [t for t,_ in sortable[:DAILY_CAP]]
+        print(f'DAILY mode: {len(candidate)} tickers due (cutoff {freshness_cutoff.date()}); '
+              f'fetching the {len(todo)} most-stale (cap {DAILY_CAP})')
+    else:
+        todo = [t for t in tickers if t not in done and t not in bad]
+        print(f'Done: {len(done)}, failed: {len(bad)}, remaining: {len(todo)}')
     if not todo:
         print('All done!'); return
 
