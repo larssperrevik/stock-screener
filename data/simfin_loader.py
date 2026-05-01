@@ -78,6 +78,17 @@ def load_derived_quarterly():
             df = df.drop_duplicates(subset=["Ticker", "Fiscal Year", "Fiscal Period"], keep="last")
             print(f"  Derived quarterly supplement: +{len(sup)} records")
 
+    # Defensive filter: drop any rows whose Publish Date is in the future
+    # (SimFin occasionally has typo'd years that would leak lookahead bias
+    # into backtests). MNTN had 2 such rows in 2026-04 — fixed in the supplement
+    # but keep the guard for next time.
+    today_plus_30 = pd.Timestamp.now() + pd.Timedelta(days=30)
+    future_mask = df["Publish Date"] > today_plus_30
+    if future_mask.any():
+        n_dropped = int(future_mask.sum())
+        df = df[~future_mask]
+        print(f"  Dropped {n_dropped} rows with future Publish Date (SimFin typo guard)")
+
     return df
 
 
